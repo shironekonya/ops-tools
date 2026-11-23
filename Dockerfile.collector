@@ -1,0 +1,26 @@
+# Jenkins Collector 容器镜像（多阶段构建）。
+#
+# 构建 context 必须是仓库根目录：与 exporter 共用单一 go.mod（module ops-exporter）。
+# 仅编译 cmd/collector 及其依赖的 internal/collector/*，不把 exporter 代码打进镜像。
+# 认证信息不进镜像：运行时由环境变量注入（JENKINS_USERNAME / JENKINS_API_TOKEN）。
+FROM golang:1.27-alpine AS builder
+WORKDIR /src
+ENV CGO_ENABLED=0 GOOS=linux
+
+# 先 COPY 依赖声明再下载：依赖不变时这一层走缓存，改代码不必重新 download。
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+RUN go build -trimpath -ldflags="-s -w" -o /out/collector ./cmd/collector
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata
+WORKDIR /app
+COPY --from=builder /out/collector /app/collector
+COPY config.collector.docker.json /app/config.json
+RUN mkdir -p /app/data
+
+ENTRYPOINT ["/app/collector"]
+CMD ["-config", "/app/config.json"]

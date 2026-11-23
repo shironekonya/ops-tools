@@ -1,0 +1,17 @@
+# 两个镜像共用仓库根作为构建 context：
+# 只需 go.mod/go.sum、cmd/、internal/、对应 config.docker.json 与 Dockerfile。
+.git
+.workbuddy
+data
+dist
+docs
+deploy
+*.md
+.env
+.env.example
+docker-compose.yml
+config.json
+grafana-dashboard.json
+promql.md
+# collector 专用配置由 compose 运行时挂载，不需要进 exporter 镜像构建上下文
+config.collector.example.json

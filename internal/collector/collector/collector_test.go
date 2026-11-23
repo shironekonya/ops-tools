@@ -1,0 +1,339 @@
+package collector
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"ops-exporter/internal/collector/model"
+	"ops-exporter/internal/collector/state"
+)
+
+// --- mocks ---
+
+type mockBuilds struct {
+	mu    sync.Mutex
+	infos map[string]model.BuildInfo
+	oks   map[string]bool
+	errs  map[string]error
+	calls map[string]int
+}
+
+func newMockBuilds() *mockBuilds {
+	return &mockBuilds{infos: map[string]model.BuildInfo{}, oks: map[string]bool{}, errs: map[string]error{}, calls: map[string]int{}}
+}
+func (m *mockBuilds) GetLatestBuild(job string) (model.BuildInfo, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls[job]++
+	return m.infos[job], m.oks[job], m.errs[job]
+}
+func (m *mockBuilds) set(job string, info model.BuildInfo, ok bool, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.infos[job] = info
+	m.oks[job] = ok
+	m.errs[job] = err
+}
+
+type mockLogs struct {
+	text string
+	err  error
+}
+
+func (m *mockLogs) GetConsoleLog(job string, number int64) (string, error) { return m.text, m.err }
+
+type mockSender struct {
+	mu     sync.Mutex
+	sent   []model.BuildResult
+	failOn int64 // build_number == failOn 时返回错误，0 表示不失败
+}
+
+func (m *mockSender) Send(b model.BuildResult) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failOn != 0 && b.BuildNumber == m.failOn {
+		return errors.New("send failed")
+	}
+	m.sent = append(m.sent, b)
+	return nil
+}
+func (m *mockSender) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sent)
+}
+
+func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func successInfo(job string, num int64) model.BuildInfo {
+	return model.BuildInfo{JobName: job, Number: num, Result: model.JenkinsSuccess, TimestampMs: 1700000000000, DurationMs: 1000}
+}
+
+// TestCollectOnce_Sends 正常链路：取构建→解析日志→标准化→发送，阶段名带入。
+func TestCollectOnce_Sends(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	logs := &mockLogs{text: "[Pipeline] Stage: Deploy\nERROR: failed"}
+	s := &mockSender{}
+	c := newWithDeps(b, logs, s, []string{"deploy"}, testLogger())
+
+	sent, errs := c.CollectOnce()
+	if sent != 1 || errs != 0 {
+		t.Fatalf("sent=%d errs=%d, want 1/0", sent, errs)
+	}
+	if s.count() != 1 {
+		t.Fatalf("sender calls = %d, want 1", s.count())
+	}
+	got := s.sent[0]
+	if got.JobName != "deploy" || got.BuildNumber != 42 || got.Status != model.StatusSuccess {
+		t.Errorf("sent build wrong: %+v", got)
+	}
+	if got.FailedStage != "Deploy" {
+		t.Errorf("FailedStage = %q, want Deploy", got.FailedStage)
+	}
+}
+
+// TestCollectOnce_Dedup 同一个 Build 不重复处理（去重）。
+func TestCollectOnce_Dedup(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	c.CollectOnce()
+	c.CollectOnce()
+	c.CollectOnce()
+	if s.count() != 1 {
+		t.Errorf("sender calls = %d, want 1 (dedup)", s.count())
+	}
+}
+
+// TestCollectOnce_NewBuild 新 build_number 触发再次发送。
+func TestCollectOnce_NewBuild(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	c.CollectOnce()
+	b.set("deploy", successInfo("deploy", 43), true, nil)
+	c.CollectOnce()
+	if s.count() != 2 {
+		t.Errorf("sender calls = %d, want 2 for two builds", s.count())
+	}
+}
+
+// TestCollectOnce_OlderBuildIgnored 更旧的 build（乱序）不处理。
+func TestCollectOnce_OlderBuildIgnored(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 50), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	c.CollectOnce()
+	b.set("deploy", successInfo("deploy", 49), true, nil)
+	c.CollectOnce()
+	if s.count() != 1 {
+		t.Errorf("older build should not be sent, calls = %d", s.count())
+	}
+}
+
+// TestCollectOnce_SendFailureRetriedNextRound 发送失败不更新 seen，下一轮重试。
+func TestCollectOnce_SendFailureRetriedNextRound(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{failOn: 42}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	_, errs := c.CollectOnce()
+	if errs != 1 || s.count() != 0 {
+		t.Fatalf("first round errs=%d sent=%d", errs, s.count())
+	}
+	// 修复发送，下一轮应重试同一个 build
+	s.failOn = 0
+	sent, errs := c.CollectOnce()
+	if sent != 1 || errs != 0 || s.count() != 1 {
+		t.Errorf("retry round sent=%d errs=%d calls=%d", sent, errs, s.count())
+	}
+}
+
+// TestCollectOnce_BuildingSkipped 构建中（ok=false）跳过。
+func TestCollectOnce_BuildingSkipped(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", model.BuildInfo{}, false, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	sent, errs := c.CollectOnce()
+	if sent != 0 || errs != 0 || s.count() != 0 {
+		t.Errorf("building build should be skipped: sent=%d errs=%d calls=%d", sent, errs, s.count())
+	}
+}
+
+// TestCollectOnce_UnknownResultSkipped 未知状态跳过（不发送）。
+func TestCollectOnce_UnknownResultSkipped(t *testing.T) {
+	info := successInfo("deploy", 42)
+	info.Result = "RUNNING"
+	b := newMockBuilds()
+	b.set("deploy", info, true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	sent, errs := c.CollectOnce()
+	if sent != 0 || errs != 0 || s.count() != 0 {
+		t.Errorf("unknown result should be skipped: sent=%d errs=%d calls=%d", sent, errs, s.count())
+	}
+}
+
+// TestCollectOnce_MultipleJobs 多 Job 各自独立采集与去重。
+func TestCollectOnce_MultipleJobs(t *testing.T) {
+	b := newMockBuilds()
+	b.set("job-a", successInfo("job-a", 1), true, nil)
+	b.set("job-b", successInfo("job-b", 2), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"job-a", "job-b"}, testLogger())
+
+	sent, errs := c.CollectOnce()
+	if sent != 2 || errs != 0 || s.count() != 2 {
+		t.Errorf("sent=%d errs=%d calls=%d, want 2/0/2", sent, errs, s.count())
+	}
+}
+
+// TestCollectOnce_LogFailureDegrades console log 获取失败时降级为空阶段，仍发送。
+func TestCollectOnce_LogFailureDegrades(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	logs := &mockLogs{err: errors.New("log unavailable")}
+	s := &mockSender{}
+	c := newWithDeps(b, logs, s, []string{"deploy"}, testLogger())
+
+	sent, errs := c.CollectOnce()
+	if sent != 1 || errs != 0 || s.count() != 1 {
+		t.Errorf("log failure should degrade: sent=%d errs=%d calls=%d", sent, errs, s.count())
+	}
+	if s.sent[0].FailedStage != "" {
+		t.Errorf("FailedStage should be empty on log failure: %q", s.sent[0].FailedStage)
+	}
+}
+
+// TestRun_TickerAndCancel ticker 周期采集，ctx 取消后退出。
+func TestRun_TickerAndCancel(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.Run(ctx, 20*time.Millisecond)
+		close(done)
+	}()
+
+	// Run 立即采一次（去重后只发一次），随后 ticker 轮次不再重复发同一 build。
+	time.Sleep(70 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not exit on cancel")
+	}
+	if s.count() != 1 {
+		t.Errorf("sender calls = %d, want 1 (dedup across ticks)", s.count())
+	}
+}
+
+// TestRun_NewBuildOnTick ticker 检测到新 build 会发送。
+func TestRun_NewBuildOnTick(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx, 20*time.Millisecond); close(done) }()
+
+	time.Sleep(30 * time.Millisecond)
+	b.set("deploy", successInfo("deploy", 43), true, nil)
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+	<-done
+
+	if s.count() != 2 {
+		t.Errorf("sender calls = %d, want 2 (new build on tick)", s.count())
+	}
+}
+
+// --- 断点续传（Task 5）---
+
+// TestStatePersistence_NoResendAfterRestart 采集成功后断点落盘，
+// 新建的 Collector 从断点恢复，不会重复发送同一 build。
+func TestStatePersistence_NoResendAfterRestart(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+
+	// 第一次运行：发送 build 42，断点写入磁盘。
+	s1 := &mockSender{}
+	c1 := newWithDeps(b, &mockLogs{}, s1, []string{"deploy"}, testLogger())
+	c1.stateFile = statePath
+	if sent, _ := c1.CollectOnce(); sent != 1 {
+		t.Fatalf("first run sent = %d, want 1", sent)
+	}
+	if _, err := os.Stat(statePath); err != nil {
+		t.Fatalf("state file not created: %v", err)
+	}
+
+	// 模拟重启：全新依赖 + 从磁盘恢复断点。
+	st, err := state.Load(statePath)
+	if err != nil {
+		t.Fatalf("Load state: %v", err)
+	}
+	s2 := &mockSender{}
+	c2 := newWithDeps(b, &mockLogs{}, s2, []string{"deploy"}, testLogger())
+	c2.stateFile = statePath
+	c2.seen = st.Seen // 等价于 NewWithState 的恢复动作
+	if sent, _ := c2.CollectOnce(); sent != 0 {
+		t.Errorf("after restart should not resend build 42, sent = %d", sent)
+	}
+	if s2.count() != 0 {
+		t.Errorf("after restart sender calls = %d, want 0", s2.count())
+	}
+
+	// 来了新 build 43，应正常发送并更新断点。
+	b.set("deploy", successInfo("deploy", 43), true, nil)
+	if sent, _ := c2.CollectOnce(); sent != 1 {
+		t.Errorf("new build should be sent, sent = %d", sent)
+	}
+	st2, _ := state.Load(statePath)
+	if st2.Seen["deploy"] != 43 {
+		t.Errorf("state after new build = %+v, want deploy=43", st2.Seen)
+	}
+}
+
+// TestStatePersistence_SendFailureNotSaved 发送失败时不写断点，重启后仍会重试。
+func TestStatePersistence_SendFailureNotSaved(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{failOn: 42}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+	c.stateFile = statePath
+
+	c.CollectOnce()
+	st, err := state.Load(statePath)
+	if err != nil {
+		t.Fatalf("Load state: %v", err)
+	}
+	if len(st.Seen) != 0 {
+		t.Errorf("failed send must not be persisted, got %+v", st.Seen)
+	}
+}

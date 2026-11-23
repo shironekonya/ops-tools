@@ -1,0 +1,107 @@
+# 可独立部署的完整监控系统（Task 5 验收目标）。
+#
+# 四个服务：
+#   exporter   — 接收 Jenkins 构建推送 + 文件管道，暴露 /metrics
+#   collector  — 定时从 Jenkins 采集并 POST 给 exporter（可选，认证走 .env）
+#   prometheus — 每 15s 抓取 exporter，存储时序
+#   grafana    — 自动加载数据源 + 本仓库 dashboard
+#
+# 使用：
+#   1. cp .env.example .env，填入 JENKINS_URL / JENKINS_USERNAME / JENKINS_API_TOKEN / GRAFANA_ADMIN_PASSWORD
+#   2. docker compose up -d
+#   3. Grafana: http://<host>:3000（admin / 第 1 步密码），Ops 文件夹下见 Dashboard
+#   4. Prometheus: http://<host>:9090
+#
+# 若暂时没有 Jenkins，只起监控栈：docker compose up -d exporter prometheus grafana
+
+services:
+  exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile.exporter
+    image: ops-exporter:local
+    container_name: ops-exporter
+    ports:
+      - "9105:9105"
+    volumes:
+      # config.docker.json 含 Task 5 的 http 超时与数据过期配置；改配置后重建或 restart 挂载
+      - ./config.docker.json:/app/config.json:ro
+      - exporter-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9105/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    image: jenkins-collector:local
+    container_name: jenkins-collector
+    # 认证不进镜像/不硬编码：运行时由 .env 注入（见 config.go 的 EnvJenkins*）
+    environment:
+      JENKINS_USERNAME: ${JENKINS_USERNAME:-}
+      JENKINS_API_TOKEN: ${JENKINS_API_TOKEN:-}
+    volumes:
+      # 使用前先编辑 config.docker.json 填入真实 jenkins_url / jobs（认证走 .env，不写文件）
+      - ./config.collector.docker.json:/app/config.json:ro
+      # 断点状态挂到宿主机卷：容器重建后不重复推送已处理 Build（Task 5 断点续传）
+      - collector-state:/app/data
+    depends_on:
+      exporter:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - monitoring
+    profiles:
+      - collector # 默认不起；docker compose --profile collector up -d 或显式指定服务名启动
+
+  prometheus:
+    image: prom/prometheus:v3.8.0
+    container_name: ops-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    depends_on:
+      - exporter
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:12.0.0
+    container_name: ops-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      # 单一真源：直接挂仓库根目录的 dashboard，避免多副本不同步
+      - ./grafana-dashboard.json:/var/lib/grafana/dashboards/ops-exporter.json:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+volumes:
+  exporter-data:
+  collector-state:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  monitoring:
+    driver: bridge

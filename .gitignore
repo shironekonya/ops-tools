@@ -1,0 +1,30 @@
+# 敏感信息：本地环境变量（含 Jenkins 用户名/API Token、Grafana 密码）
+.env
+.env.*
+!.env.example
+
+# 含真实凭据或本地地址的配置文件（按需创建，模板见 *.example.json）
+config.local.json
+config.collector.local.json
+
+# 运行时数据与断点（result_dir / state_file：采集结果、collector 状态）
+data/
+# 构建产物
+dist/
+/bin/
+*.exe
+
+# Go 测试与覆盖率产物
+*.test
+*.out
+coverage.*
+
+# 日志与临时文件
+*.log
+*.bak
+*.tmp
+
+# 编辑器 / 操作系统
+.idea/
+.vscode/
+.DS_Store

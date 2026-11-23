@@ -1,0 +1,31 @@
+# Ops Exporter 容器镜像（多阶段构建）。
+#
+# 构建 context 必须是仓库根目录（单一 module：go.mod/go.sum + cmd/ + internal/）。
+# 两个入口（exporter / collector）共用同一 module，各自只编译自己的 cmd 与依赖包。
+FROM golang:1.27-alpine AS builder
+WORKDIR /src
+ENV CGO_ENABLED=0 GOOS=linux
+
+# 先 COPY 依赖声明再下载：依赖不变时这一层走缓存，改代码不必重新 download。
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+RUN go build -trimpath -ldflags="-s -w" -o /out/exporter ./cmd/exporter
+
+# 运行阶段：静态二进制 + 最小系统。alpine 带 ca-certificates 便于 HTTPS 场景，
+# tzdata 便于日志时间正确；wget 用于 HEALTHCHECK。
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata
+WORKDIR /app
+COPY --from=builder /out/exporter /app/exporter
+COPY config.docker.json /app/config.json
+RUN mkdir -p /app/data
+
+EXPOSE 9105
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:9105/healthz || exit 1
+
+ENTRYPOINT ["/app/exporter"]
+CMD ["-config", "/app/config.json"]

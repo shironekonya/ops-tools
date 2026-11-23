@@ -1,0 +1,1644 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Ops Exporter 任务运行状态总览。数据来自 ops-exporter 的 /metrics（Prometheus job: ops-exporter）。含文件管道（ops_job_*）与 Jenkins 推送管道（jenkins_build_*）两个区块；指标语义见 promql.md。",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "ops-exporter",
+    "jenkins",
+    "ops"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "数据源",
+        "type": "datasource",
+        "query": "prometheus",
+        "hide": 0,
+        "refresh": 1,
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "options": []
+      },
+      {
+        "name": "job",
+        "label": "任务",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": {
+          "query": "label_values(ops_job_last_status, job_name)",
+          "refId": "job-var"
+        },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "sort": 1,
+        "hide": 0
+      },
+      {
+        "name": "jenkins_job",
+        "label": "Jenkins 任务",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": {
+          "query": "label_values(jenkins_build_status, job_name)",
+          "refId": "jenkins-job-var"
+        },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "sort": 1,
+        "hide": 0
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Ops Exporter - 任务与 Jenkins 构建状态",
+  "uid": "ops-exporter",
+  "version": 2,
+  "weekStart": "",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "失败任务数",
+      "description": "当前 last_status=0 的任务数量。任何非零值都应立即处理。表达式为或运算：有任务但无失败时显式给 0，完全没数据时才显示 No data（避免假绿）。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(ops_job_last_status == 0) or (count(ops_job_last_status) > 0) * 0",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "任务总数",
+      "description": "exporter 当前采集到的任务数量（结果目录中的任务文件数）。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(ops_job_last_status)",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Exporter 新鲜度",
+      "description": "time() - ops_exporter_last_refresh_timestamp_seconds。超过阈值说明 exporter 自身失效（挂了/目录持续读不了），此时所有任务数据都不可信，应优先处理本告警。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - ops_exporter_last_refresh_timestamp_seconds",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "采集目标",
+      "description": "Prometheus 对 ops-exporter 的抓取状态。0 表示 exporter 进程或网络异常。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"ops-exporter\"}",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "中断",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "正常",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "任务状态：$job",
+      "description": "1=成功 0=失败。按任务变量重复展示，失败的格子显示红色。",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "repeat": "job",
+      "repeatDirection": "h",
+      "maxPerRow": 6,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ops_job_last_status{job_name=~\"$job\"}",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "失败",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "成功",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "距上次成功：$job",
+      "description": "time() - ops_job_last_success_timestamp_seconds。显示\"从未成功\"=该任务从未成功执行过（last_success=0 的特殊语义）；超过 86400s(24h) 视为异常。",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "repeat": "job",
+      "repeatDirection": "h",
+      "maxPerRow": 6,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - ops_job_last_success_timestamp_seconds{job_name=~\"$job\"}",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 1500000000,
+                "to": 2000000000,
+                "result": {
+                  "text": "从未成功",
+                  "color": "red",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 43200
+              },
+              {
+                "color": "red",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "距上次执行：$job",
+      "description": "time() - ops_job_last_run_timestamp_seconds。长时间未执行的任务在这里显示黄色(>12h)/红色(>24h)。注意：任务文件删除后该序列保留旧值并持续增长，因此停跑的任务不会漏报。",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "repeat": "job",
+      "repeatDirection": "h",
+      "maxPerRow": 6,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - ops_job_last_run_timestamp_seconds{job_name=~\"$job\"}",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 43200
+              },
+              {
+                "color": "red",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 20,
+      "type": "table",
+      "title": "任务总览表",
+      "description": "四个指标按 job_name 合并：状态 / 距上次执行 / 距上次成功 / 最近耗时。一行一个任务，用于快速巡检。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ops_job_last_status{job_name=~\"$job\"}",
+          "instant": true,
+          "legendFormat": "{{job_name}}"
+        },
+        {
+          "refId": "B",
+          "expr": "time() - ops_job_last_run_timestamp_seconds{job_name=~\"$job\"}",
+          "instant": true,
+          "legendFormat": "{{job_name}}"
+        },
+        {
+          "refId": "C",
+          "expr": "time() - ops_job_last_success_timestamp_seconds{job_name=~\"$job\"}",
+          "instant": true,
+          "legendFormat": "{{job_name}}"
+        },
+        {
+          "refId": "D",
+          "expr": "ops_job_last_duration_seconds{job_name=~\"$job\"}",
+          "instant": true,
+          "legendFormat": "{{job_name}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "__name__": true,
+              "__name__ 1": true,
+              "__name__ 2": true,
+              "__name__ 3": true,
+              "__name__ 4": true,
+              "env": true,
+              "host": true,
+              "instance": true,
+              "job": true
+            },
+            "renameByName": {
+              "Value #A": "状态",
+              "Value #B": "距上次执行(s)",
+              "Value #C": "距上次成功(s)",
+              "Value #D": "耗时(s)",
+              "ops_job_last_status": "状态",
+              "ops_job_last_duration_seconds": "耗时(s)"
+            },
+            "indexByName": {
+              "job_name": 0,
+              "状态": 1,
+              "距上次执行(s)": 2,
+              "距上次成功(s)": 3,
+              "耗时(s)": 4
+            }
+          }
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "状态"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "❌ 失败",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "✅ 成功",
+                        "color": "green",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "距上次执行(s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 43200
+                    },
+                    {
+                      "color": "red",
+                      "value": 86400
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "距上次成功(s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 43200
+                    },
+                    {
+                      "color": "red",
+                      "value": 86400
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "耗时(s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "距上次执行时间趋势",
+      "description": "每个任务 time() - last_run 的曲线。正常任务呈锯齿状（每次执行回落）；曲线只涨不跌=任务停跑；\"未执行过\"任务不出现（需配合告警层的 absent() 规则）。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - ops_job_last_run_timestamp_seconds{job_name=~\"$job\"}",
+          "instant": false,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "最近执行耗时",
+      "description": "ops_job_last_duration_seconds（阶梯状，取每次执行的最新值）。耗时突增是任务性能劣化的先行信号。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ops_job_last_duration_seconds{job_name=~\"$job\"}",
+          "instant": false,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "lineInterpolation": "stepAfter",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 39,
+      "type": "text",
+      "title": "",
+      "description": "",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "## Jenkins 构建监控（推送管道 `jenkins_build_*`）\n数据经 Jenkins Collector → `POST /api/v1/ingest/build` → Exporter；与上方文件管道（`ops_job_*`）共用同一 Prometheus job。`$jenkins_job` 为本区块独立任务变量。"
+      }
+    },
+    {
+      "id": 40,
+      "type": "stat",
+      "title": "构建总数（24h）",
+      "description": "近 24h 被接受的构建数（Counter increase，自动处理 exporter 重启归零）。完全无数据时显示 No data；有序列但无增量时显示 0，避免假绿。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(jenkins_build_total[24h])) or (count(jenkins_build_total) > 0) * 0",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "失败构建数（24h）",
+      "description": "近 24h status=failed 的构建数。unstable/aborted 不计入失败（见 buildupdater.go）。非零即红。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(jenkins_build_failure_total[24h])) or (count(jenkins_build_failure_total) > 0) * 0",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "构建成功率（24h）",
+      "description": "1 - 失败/总数。clamp_min 防除零；and 保证无数据时显示 No data 而非 100% 假绿。低于 95% 变黄、90% 变红。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(1 - (sum(increase(jenkins_build_failure_total[24h])) / clamp_min(sum(increase(jenkins_build_total[24h])), 1))) and (count(jenkins_build_total) > 0)",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 43,
+      "type": "stat",
+      "title": "最近构建距今",
+      "description": "所有 Jenkins Job 中最近一次构建结束距今秒数。超过 12h 黄、24h 红——持续增大说明 Collector 停摆或 Jenkins 长时间无构建。无 jenkins 数据时 No data。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(jenkins_build_last_timestamp_seconds)",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 43200
+              },
+              {
+                "color": "red",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 50,
+      "type": "stat",
+      "title": "构建状态：$jenkins_job",
+      "description": "1=最近一次成功（绿），0=failed/unstable/aborted（红）。按 $jenkins_job 重复展示。",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jenkins_build_status{job_name=~\"$jenkins_job\"}",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "repeat": "jenkins_job",
+      "repeatDirection": "h",
+      "maxPerRow": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "失败",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "成功",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 51,
+      "type": "stat",
+      "title": "最近耗时：$jenkins_job",
+      "description": "最近一次构建耗时（秒）。按 $jenkins_job 重复展示，耗时突增是劣化信号。",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jenkins_build_duration_seconds{job_name=~\"$jenkins_job\"}",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "repeat": "jenkins_job",
+      "repeatDirection": "h",
+      "maxPerRow": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 60,
+      "type": "timeseries",
+      "title": "构建耗时趋势",
+      "description": "每次构建的最新耗时（阶梯图）。突增=构建性能劣化。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jenkins_build_duration_seconds{job_name=~\"$jenkins_job\"}",
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{job_name}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "lineInterpolation": "stepAfter",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 61,
+      "type": "timeseries",
+      "title": "构建频次趋势（每小时）",
+      "description": "每小时构建次数（按 job 聚合）。频率骤降可能是 Collector 停摆或 Jenkins 侧变更。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(job_name) (increase(jenkins_build_total[1h]))",
+          "instant": false,
+          "format": "time_series",
+          "legendFormat": "{{job_name}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 40,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 70,
+      "type": "table",
+      "title": "Jenkins 构建总览表",
+      "description": "六个指标按 job_name 合并：最近状态 / 最近耗时 / 距今 / 累计构建 / 累计失败 / 成功率。一行一个 Jenkins Job。",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jenkins_build_status{job_name=~\"$jenkins_job\"}",
+          "instant": true,
+          "format": "time_series",
+          "legendFormat": "{{job_name}}"
+        },
+        {
+          "refId": "B",
+          "expr": "jenkins_build_duration_seconds{job_name=~\"$jenkins_job\"}",
+          "instant": true,
+          "format": "time_series",
+          "legendFormat": "{{job_name}}"
+        },
+        {
+          "refId": "C",
+          "expr": "time() - jenkins_build_last_timestamp_seconds{job_name=~\"$jenkins_job\"}",
+          "instant": true,
+          "format": "time_series",
+          "legendFormat": "{{job_name}}"
+        },
+        {
+          "refId": "D",
+          "expr": "jenkins_build_total{job_name=~\"$jenkins_job\"}",
+          "instant": true,
+          "format": "time_series",
+          "legendFormat": "{{job_name}}"
+        },
+        {
+          "refId": "E",
+          "expr": "jenkins_build_failure_total{job_name=~\"$jenkins_job\"}",
+          "instant": true,
+          "format": "time_series",
+          "legendFormat": "{{job_name}}"
+        },
+        {
+          "refId": "F",
+          "expr": "(1 - (jenkins_build_failure_total{job_name=~\"$jenkins_job\"} / clamp_min(jenkins_build_total{job_name=~\"$jenkins_job\"}, 1)))",
+          "instant": true,
+          "format": "time_series",
+          "legendFormat": "{{job_name}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "env": true,
+              "host": true,
+              "instance": true,
+              "job": true,
+              "Time 1": true,
+              "__name__ 1": true,
+              "env 1": true,
+              "host 1": true,
+              "instance 1": true,
+              "job 1": true,
+              "Time 2": true,
+              "__name__ 2": true,
+              "env 2": true,
+              "host 2": true,
+              "instance 2": true,
+              "job 2": true,
+              "Time 3": true,
+              "__name__ 3": true,
+              "env 3": true,
+              "host 3": true,
+              "instance 3": true,
+              "job 3": true,
+              "Time 4": true,
+              "__name__ 4": true,
+              "env 4": true,
+              "host 4": true,
+              "instance 4": true,
+              "job 4": true,
+              "Time 5": true,
+              "__name__ 5": true,
+              "env 5": true,
+              "host 5": true,
+              "instance 5": true,
+              "job 5": true
+            },
+            "renameByName": {
+              "Value #A": "状态",
+              "Value #B": "耗时(s)",
+              "Value #C": "距今(s)",
+              "Value #D": "构建总数",
+              "Value #E": "失败总数",
+              "Value #F": "成功率"
+            },
+            "indexByName": {
+              "job_name": 0,
+              "状态": 1,
+              "耗时(s)": 2,
+              "距今(s)": 3,
+              "构建总数": 4,
+              "失败总数": 5,
+              "成功率": 6
+            }
+          }
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true,
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "状态"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "❌ 非成功",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "✅ 成功",
+                        "color": "green",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "耗时(s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "距今(s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 43200
+                    },
+                    {
+                      "color": "red",
+                      "value": 86400
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "成功率"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.9
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.95
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
