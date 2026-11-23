@@ -13,7 +13,7 @@ import (
 func TestGetLatestBuild(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/job/deploy/lastBuild/api/json" {
+		if r.URL.Path != "/job/deploy/lastCompletedBuild/api/json" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
 		gotAuth = r.Header.Get("Authorization")
@@ -44,7 +44,7 @@ func TestGetLatestBuild(t *testing.T) {
 	}
 }
 
-// TestGetLatestBuild_Building result=null 时 ok=false。
+// TestGetLatestBuild_Building result=null 时 ok=false（防御分支）。
 func TestGetLatestBuild_Building(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"number":43,"result":null,"timestamp":1700000000000,"duration":0}`))
@@ -58,6 +58,36 @@ func TestGetLatestBuild_Building(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("building build (result=null) should return ok=false")
+	}
+}
+
+// TestGetLatestBuild_UsesCompletedBuild 证明采集目标是 lastCompletedBuild：
+// 即使 lastBuild 返回一个正在执行中的构建（result=null），只要已完成构建
+// 有结果，就应取已完成构建的数据，而不是被运行中构建阻塞（现场问题回归）。
+func TestGetLatestBuild_UsesCompletedBuild(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/job/deploy/lastBuild/api/json":
+			// 若误用 lastBuild：返回运行中构建，会被当作"无数据"跳过。
+			_, _ = w.Write([]byte(`{"number":44,"result":null,"timestamp":1700000000000,"duration":0}`))
+		case "/job/deploy/lastCompletedBuild/api/json":
+			_, _ = w.Write([]byte(`{"number":43,"result":"SUCCESS","timestamp":1699999000000,"duration":60000}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "", "", time.Second)
+	info, ok, err := c.GetLatestBuild("deploy")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok: completed build should be collected despite running lastBuild")
+	}
+	if info.Number != 43 || info.Result != "SUCCESS" {
+		t.Errorf("info = %+v, want completed build 43/SUCCESS", info)
 	}
 }
 

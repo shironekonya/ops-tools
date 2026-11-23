@@ -1,15 +1,15 @@
 # Ops Exporter 容器镜像（多阶段构建）。
 #
-# 构建 context 必须是仓库根目录（单一 module：go.mod/go.sum + cmd/ + internal/）。
+# 构建 context 必须是仓库根目录（单一 module：go.mod/go.sum + cmd/ + internal/ + vendor/）。
 # 两个入口（exporter / collector）共用同一 module，各自只编译自己的 cmd 与依赖包。
 FROM golang:1.27-alpine AS builder
 WORKDIR /src
-ENV CGO_ENABLED=0 GOOS=linux
+# 依赖已通过 go mod vendor 固化到 vendor/，构建全程离线，不访问 Go 模块代理
+# （内网/CI 无外网时 go mod download 会失败，这是原先的构建阻塞点）。
+ENV CGO_ENABLED=0 GOOS=linux GOFLAGS=-mod=vendor
 
-# 先 COPY 依赖声明再下载：依赖不变时这一层走缓存，改代码不必重新 download。
 COPY go.mod go.sum ./
-RUN go mod download
-
+COPY vendor/ ./vendor/
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 RUN go build -trimpath -ldflags="-s -w" -o /out/exporter ./cmd/exporter

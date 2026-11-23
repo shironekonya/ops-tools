@@ -19,11 +19,11 @@ dist/
 *.out
 coverage.*
 
-# 日志与临时文件
+# 日志与临时文件和环境变量
 *.log
 *.bak
 *.tmp
-
+*.env 
 # 编辑器 / 操作系统
 .idea/
 .vscode/

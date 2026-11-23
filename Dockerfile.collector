@@ -5,12 +5,11 @@
 # 认证信息不进镜像：运行时由环境变量注入（JENKINS_USERNAME / JENKINS_API_TOKEN）。
 FROM golang:1.27-alpine AS builder
 WORKDIR /src
-ENV CGO_ENABLED=0 GOOS=linux
+# 依赖已 vendor 固化；构建全程离线，不依赖 Go 模块代理（内网构建关键）。
+ENV CGO_ENABLED=0 GOOS=linux GOFLAGS=-mod=vendor
 
-# 先 COPY 依赖声明再下载：依赖不变时这一层走缓存，改代码不必重新 download。
 COPY go.mod go.sum ./
-RUN go mod download
-
+COPY vendor/ ./vendor/
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 RUN go build -trimpath -ldflags="-s -w" -o /out/collector ./cmd/collector
