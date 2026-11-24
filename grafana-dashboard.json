@@ -137,7 +137,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "#6E7B8F",
                 "value": null
               },
               {
@@ -145,7 +145,8 @@
                 "value": 1
               }
             ]
-          }
+          },
+          "noValue": "无数据"
         },
         "overrides": []
       }
@@ -193,11 +194,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
+                "color": "#6E7B8F",
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "无数据"
         },
         "overrides": []
       }
@@ -245,7 +247,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "#6E7B8F",
                 "value": null
               },
               {
@@ -253,7 +255,22 @@
                 "value": 60
               }
             ]
-          }
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 31536000,
+                "to": 1000000000000000.0,
+                "result": {
+                  "text": "从未刷新",
+                  "color": "orange",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "noValue": "无数据"
         },
         "overrides": []
       }
@@ -394,7 +411,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "#6E7B8F",
                 "value": null
               },
               {
@@ -402,7 +419,8 @@
                 "value": 1
               }
             ]
-          }
+          },
+          "noValue": "无数据"
         },
         "overrides": []
       }
@@ -467,7 +485,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "#6E7B8F",
                 "value": null
               },
               {
@@ -479,7 +497,8 @@
                 "value": 86400
               }
             ]
-          }
+          },
+          "noValue": "无数据"
         },
         "overrides": []
       }
@@ -530,7 +549,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "#6E7B8F",
                 "value": null
               },
               {
@@ -542,7 +561,8 @@
                 "value": 86400
               }
             ]
-          }
+          },
+          "noValue": "无数据"
         },
         "overrides": []
       }
@@ -1002,7 +1022,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "#6E7B8F",
                 "value": null
               },
               {
@@ -1010,7 +1030,8 @@
                 "value": 1
               }
             ]
-          }
+          },
+          "noValue": "无数据"
         },
         "overrides": []
       }

@@ -38,7 +38,8 @@ func TestLoadConfig_Full(t *testing.T) {
 		"interval": "15s",
 		"timeout": "5s",
 		"max_retries": 2,
-		"state_file": "/var/lib/collector/state.json"
+		"state_file": "/var/lib/collector/state.json",
+		"resend_interval": "3m"
 	}`)
 	cfg, err := LoadConfig(path)
 	if err != nil {
@@ -55,6 +56,49 @@ func TestLoadConfig_Full(t *testing.T) {
 	}
 	if cfg.StateFile != "/var/lib/collector/state.json" {
 		t.Errorf("StateFile = %q", cfg.StateFile)
+	}
+	if cfg.ResendInterval != 3*time.Minute {
+		t.Errorf("ResendInterval = %s, want 3m", cfg.ResendInterval)
+	}
+}
+
+// TestLoadConfig_ResendInterval 心跳重发的默认/显式禁用/负值非法。
+func TestLoadConfig_ResendInterval(t *testing.T) {
+	clearEnv(t)
+	cases := []struct {
+		name string
+		raw  string // 配置片段中的 resend_interval 字段，空串表示不写该字段
+		want time.Duration
+		err  string
+	}{
+		{"未配置走默认2m", "", defaultResendInterval, ""},
+		{"显式0s禁用", `"resend_interval":"0s"`, 0, ""},
+		{"显式空串禁用", `"resend_interval":""`, 0, ""},
+		{"自定义", `"resend_interval":"45s"`, 45 * time.Second, ""},
+		{"负数非法", `"resend_interval":"-1s"`, 0, "must be non-negative"},
+		{"格式非法", `"resend_interval":"abc"`, 0, "invalid resend_interval"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			extra := ""
+			if tc.raw != "" {
+				extra = "," + tc.raw
+			}
+			path := writeConfig(t, `{"jenkins_url":"http://j","jobs":["a"],"exporter_url":"http://x"`+extra+`}`)
+			cfg, err := LoadConfig(path)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("want error containing %q, got %v", tc.err, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.ResendInterval != tc.want {
+				t.Errorf("ResendInterval = %s, want %s", cfg.ResendInterval, tc.want)
+			}
+		})
 	}
 }
 
@@ -93,6 +137,9 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	}
 	if cfg.Interval != defaultInterval || cfg.Timeout != defaultTimeout || cfg.MaxRetries != defaultMaxRetries {
 		t.Errorf("defaults not applied: %+v", cfg)
+	}
+	if cfg.ResendInterval != defaultResendInterval {
+		t.Errorf("ResendInterval = %s, want default %s", cfg.ResendInterval, defaultResendInterval)
 	}
 }
 

@@ -7,5 +7,6 @@
   "interval": "30s",
   "timeout": "10s",
   "max_retries": 3,
-  "state_file": "data/collector-state.json"
+  "state_file": "data/collector-state.json",
+  "resend_interval": "2m"
 }

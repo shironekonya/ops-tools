@@ -1,5 +1,6 @@
 # 两个镜像共用仓库根作为构建 context：
-# 只需 go.mod/go.sum、cmd/、internal/、对应 config.docker.json 与 Dockerfile。
+# 只需 go.mod/go.sum、vendor/（离线依赖）、cmd/、internal/、对应 config.docker.json 与 Dockerfile。
+# vendor/ 必须随 context 传入，否则 Dockerfile 的 -mod=vendor 构建会失败。
 .git
 .workbuddy
 data

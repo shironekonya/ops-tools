@@ -25,41 +25,48 @@ const (
 	defaultInterval   = 30 * time.Second
 	defaultTimeout    = 10 * time.Second
 	defaultMaxRetries = 3
+	// defaultResendInterval 心跳重发周期：Exporter 重启后内存清空，Collector 靠断点
+	// 不会重发旧 build，Gauge 将永久 No data。2 分钟是"够快恢复 + 不产生无谓流量"的折中。
+	// 设为 <=0 可禁用（保持旧行为）。
+	defaultResendInterval = 2 * time.Minute
 )
 
 // Config 是加载并校验后的强类型配置。
 type Config struct {
-	JenkinsURL  string        // Jenkins 根地址，如 http://jenkins:8080
-	Username    string        // Jenkins 用户名（可来自环境变量）
-	APIToken    string        // Jenkins API Token（可来自环境变量，不硬编码）
-	Jobs        []string      // 要采集的 Job 名列表（多个）
-	ExporterURL string        // exporter ingest 地址，如 http://exporter:9105/api/v1/ingest/build
-	Interval    time.Duration // 采集间隔
-	Timeout     time.Duration // 单次 HTTP 请求超时
-	MaxRetries  int           // 发送失败重试次数（有限）
-	StateFile   string        // 断点持久化路径（非空启用；Task 5）
+	JenkinsURL     string        // Jenkins 根地址，如 http://jenkins:8080
+	Username       string        // Jenkins 用户名（可来自环境变量）
+	APIToken       string        // Jenkins API Token（可来自环境变量，不硬编码）
+	Jobs           []string      // 要采集的 Job 名列表（多个）
+	ExporterURL    string        // exporter ingest 地址，如 http://exporter:9105/api/v1/ingest/build
+	Interval       time.Duration // 采集间隔
+	Timeout        time.Duration // 单次 HTTP 请求超时
+	MaxRetries     int           // 发送失败重试次数（有限）
+	StateFile      string        // 断点持久化路径（非空启用；Task 5）
+	ResendInterval time.Duration // 心跳重发周期（<=0 禁用）; Exporter 重启后恢复 Gauge
 }
 
 // configFile 是 JSON 原始形态，间隔字段用字符串（time.ParseDuration）。
 type configFile struct {
-	JenkinsURL  string   `json:"jenkins_url"`
-	Username    string   `json:"username"`
-	APIToken    string   `json:"api_token"`
-	Jobs        []string `json:"jobs"`
-	ExporterURL string   `json:"exporter_url"`
-	Interval    string   `json:"interval"`
-	Timeout     string   `json:"timeout"`
-	MaxRetries  *int     `json:"max_retries"`
-	StateFile   string   `json:"state_file"`
+	JenkinsURL     string   `json:"jenkins_url"`
+	Username       string   `json:"username"`
+	APIToken       string   `json:"api_token"`
+	Jobs           []string `json:"jobs"`
+	ExporterURL    string   `json:"exporter_url"`
+	Interval       string   `json:"interval"`
+	Timeout        string   `json:"timeout"`
+	MaxRetries     *int     `json:"max_retries"`
+	StateFile      string   `json:"state_file"`
+	ResendInterval *string  `json:"resend_interval"` // 指针区分"未配置"(默认2m)与"显式0/空"(禁用)
 }
 
 // LoadConfig 从 path 加载配置，再用环境变量覆盖认证字段。
 // path 为空或文件不存在时只保留默认值 + 环境变量，必填项在最后统一校验。
 func LoadConfig(path string) (Config, error) {
 	cfg := Config{
-		Interval:   defaultInterval,
-		Timeout:    defaultTimeout,
-		MaxRetries: defaultMaxRetries,
+		Interval:       defaultInterval,
+		Timeout:        defaultTimeout,
+		MaxRetries:     defaultMaxRetries,
+		ResendInterval: defaultResendInterval,
 	}
 
 	var f configFile
@@ -108,6 +115,22 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, fmt.Errorf("config: max_retries must be non-negative, got %d", *f.MaxRetries)
 		}
 		cfg.MaxRetries = *f.MaxRetries
+	}
+	// resend_interval 可选：未配置走默认；显式 "0s"/空串禁用；负数非法。
+	if f.ResendInterval != nil {
+		v := strings.TrimSpace(*f.ResendInterval)
+		if v == "" {
+			cfg.ResendInterval = 0
+		} else {
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				return Config{}, fmt.Errorf("config: invalid resend_interval %q: %w", v, err)
+			}
+			if d < 0 {
+				return Config{}, fmt.Errorf("config: resend_interval must be non-negative, got %q", v)
+			}
+			cfg.ResendInterval = d
+		}
 	}
 
 	// 环境变量覆盖认证信息（优先级高于配置文件）。

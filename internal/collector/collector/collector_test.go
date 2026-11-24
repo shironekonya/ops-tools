@@ -337,3 +337,222 @@ func TestStatePersistence_SendFailureNotSaved(t *testing.T) {
 		t.Errorf("failed send must not be persisted, got %+v", st.Seen)
 	}
 }
+
+// --- 心跳重发（Exporter 重启后恢复 Gauge）---
+
+// newFakeClock 返回可手动推进的时钟，注入 c.now 以精确控制心跳周期。
+func newFakeClock() (*time.Time, func() time.Time) {
+	t := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	return &t, func() time.Time { return t }
+}
+
+// TestResend_DisabledByDefault resendInterval<=0 时不重发（向后兼容）。
+func TestResend_DisabledByDefault(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+
+	c.CollectOnce()
+	c.CollectOnce()
+	c.CollectOnce()
+	if s.count() != 1 {
+		t.Errorf("resend disabled, sender calls = %d, want 1", s.count())
+	}
+}
+
+// TestResend_ReplaysAfterInterval 到达周期后重发缓存的最新 Build，
+// 且重发不更新 seen（断点仍是最初的 build_number）。
+func TestResend_ReplaysAfterInterval(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+	c.stateFile = statePath
+	c.SetResendInterval(5 * time.Minute)
+	clockPtr, clock := newFakeClock()
+	c.now = clock
+
+	c.CollectOnce() // 首次发送，记录计时基准
+	if s.count() != 1 {
+		t.Fatalf("initial send calls = %d, want 1", s.count())
+	}
+
+	*clockPtr = clockPtr.Add(4 * time.Minute)
+	c.CollectOnce() // 未到周期，去重跳过
+	if s.count() != 1 {
+		t.Errorf("before interval calls = %d, want 1", s.count())
+	}
+
+	*clockPtr = clockPtr.Add(2 * time.Minute) // 累计 6 分钟，超过 5 分钟周期
+	c.CollectOnce()
+	if s.count() != 2 {
+		t.Errorf("after interval calls = %d, want 2 (heartbeat resend)", s.count())
+	}
+	if s.sent[1].BuildNumber != 42 {
+		t.Errorf("resent build_number = %d, want 42", s.sent[1].BuildNumber)
+	}
+
+	// 重发不改断点：仍是 42，且下一轮仍按周期计时（不会每轮都发）。
+	st, _ := state.Load(statePath)
+	if st.Seen["deploy"] != 42 {
+		t.Errorf("state after resend = %+v, want deploy=42", st.Seen)
+	}
+	c.CollectOnce()
+	if s.count() != 2 {
+		t.Errorf("immediately after resend calls = %d, want 2 (timer reset)", s.count())
+	}
+}
+
+// TestResend_NewBuildResetsTimer 新 build 正常发送后重置心跳计时。
+func TestResend_NewBuildResetsTimer(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+	c.SetResendInterval(5 * time.Minute)
+	clockPtr, clock := newFakeClock()
+	c.now = clock
+
+	c.CollectOnce() // 42 发送
+	*clockPtr = clockPtr.Add(4 * time.Minute)
+	b.set("deploy", successInfo("deploy", 43), true, nil)
+	c.CollectOnce() // 43 是新 build，正常发送并重置计时
+	if s.count() != 2 {
+		t.Fatalf("two builds calls = %d, want 2", s.count())
+	}
+
+	*clockPtr = clockPtr.Add(4 * time.Minute) // 距 43 仅 4 分钟，不应重发
+	c.CollectOnce()
+	if s.count() != 2 {
+		t.Errorf("timer not reset after new build, calls = %d, want 2", s.count())
+	}
+	*clockPtr = clockPtr.Add(2 * time.Minute) // 距 43 共 6 分钟
+	c.CollectOnce()
+	if s.count() != 3 {
+		t.Errorf("heartbeat after new build calls = %d, want 3", s.count())
+	}
+	if s.sent[2].BuildNumber != 43 {
+		t.Errorf("resent build_number = %d, want 43 (latest)", s.sent[2].BuildNumber)
+	}
+}
+
+// TestResend_FailedResendDoesNotAdvanceTimer 心跳发送失败时不推进计时，下轮立即重试。
+func TestResend_FailedResendDoesNotAdvanceTimer(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+	c.SetResendInterval(5 * time.Minute)
+	clockPtr, clock := newFakeClock()
+	c.now = clock
+
+	c.CollectOnce()
+	*clockPtr = clockPtr.Add(6 * time.Minute)
+
+	// 让重发失败：failOn 只在重发时刻设置，第一次正常发送时 s.failOn=0。
+	s.failOn = 42
+	sent, errs := c.CollectOnce()
+	if sent != 0 || errs != 1 || s.count() != 1 {
+		t.Errorf("failed resend: sent=%d errs=%d calls=%d, want 0/1/1", sent, errs, s.count())
+	}
+	// 计时未推进，修复后下一轮立刻重试。
+	s.failOn = 0
+	c.CollectOnce()
+	if s.count() != 2 {
+		t.Errorf("retry after failed resend calls = %d, want 2", s.count())
+	}
+}
+
+// TestResend_MultipleJobs 每个 job 独立计时，已发送的全部按周期重发。
+func TestResend_MultipleJobs(t *testing.T) {
+	b := newMockBuilds()
+	b.set("job-a", successInfo("job-a", 1), true, nil)
+	b.set("job-b", successInfo("job-b", 2), true, nil)
+	s := &mockSender{}
+	c := newWithDeps(b, &mockLogs{}, s, []string{"job-a", "job-b"}, testLogger())
+	c.SetResendInterval(5 * time.Minute)
+	clockPtr, clock := newFakeClock()
+	c.now = clock
+
+	c.CollectOnce()
+	if s.count() != 2 {
+		t.Fatalf("initial calls = %d, want 2", s.count())
+	}
+	*clockPtr = clockPtr.Add(6 * time.Minute)
+	sent, errs := c.CollectOnce()
+	if sent != 2 || errs != 0 || s.count() != 4 {
+		t.Errorf("heartbeat: sent=%d errs=%d calls=%d, want 2/0/4", sent, errs, s.count())
+	}
+}
+
+// TestResend_NoResendBeforeFirstSend 从未成功发送过的 job 不会凭空重发。
+func TestResend_NoResendBeforeFirstSend(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{failOn: 42} // 首次发送失败，无缓存
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+	c.SetResendInterval(5 * time.Minute)
+	clockPtr, clock := newFakeClock()
+	c.now = clock
+
+	c.CollectOnce() // 发送失败，不缓存
+	*clockPtr = clockPtr.Add(10 * time.Minute)
+	s.failOn = 0
+	c.CollectOnce() // shouldProcess 成立（seen 未更新）→ 正常发送，不是心跳
+	if s.count() != 1 {
+		t.Errorf("calls = %d, want 1 (normal send, not heartbeat)", s.count())
+	}
+}
+
+// TestResend_AfterRestartRestoresGauge 模拟 Exporter 与 Collector 同时重启：
+// Collector 从断点恢复 seen，但本进程无缓存、无计时基准。首轮必须立刻心跳重发
+// （且从 Jenkins 现场重建 Build，不依赖内存缓存），这样 Exporter 内存清空后
+// Gauge 才能恢复——这正是现场"一半有数据一半 No data"的根因场景。
+func TestResend_AfterRestartRestoresGauge(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+
+	// 第一次运行：发送成功，断点落盘。
+	c1 := newWithDeps(b, &mockLogs{}, &mockSender{}, []string{"deploy"}, testLogger())
+	c1.stateFile = statePath
+	c1.SetResendInterval(5 * time.Minute)
+	if sent, _ := c1.CollectOnce(); sent != 1 {
+		t.Fatalf("first run sent = %d, want 1", sent)
+	}
+
+	// 模拟双重启：依赖全换、seen 从 state 恢复，但 latestBuild/lastResendAt 为空。
+	st, _ := state.Load(statePath)
+	s2 := &mockSender{}
+	c2 := newWithDeps(b, &mockLogs{}, s2, []string{"deploy"}, testLogger())
+	c2.stateFile = statePath
+	c2.seen = st.Seen // 等价于 NewWithState 恢复
+	c2.SetResendInterval(5 * time.Minute)
+
+	sent, errs := c2.CollectOnce()
+	if sent != 1 || errs != 0 {
+		t.Fatalf("after double restart sent=%d errs=%d, want 1/0", sent, errs)
+	}
+	if s2.count() != 1 || s2.sent[0].BuildNumber != 42 {
+		t.Errorf("heartbeat did not restore build: calls=%d builds=%+v", s2.count(), s2.sent)
+	}
+	// 重发不改断点，也不因缓存缺失而漏发未知状态。
+	if got := s2.sent[0].Status; got != model.StatusSuccess {
+		t.Errorf("resent status = %q, want success", got)
+	}
+}
+
+// TestResend_NoResendForBrandNewJob 断点无记录的全新 job 不会因心跳配置而空发。
+func TestResend_NoResendForBrandNewJob(t *testing.T) {
+	b := newMockBuilds()
+	b.set("deploy", successInfo("deploy", 42), true, nil)
+	s := &mockSender{failOn: 42} // 首次失败 → seen 无记录
+	c := newWithDeps(b, &mockLogs{}, s, []string{"deploy"}, testLogger())
+	c.SetResendInterval(time.Nanosecond) // 极短周期，若误判会立刻补发
+	c.CollectOnce()
+	if s.count() != 0 {
+		t.Errorf("brand-new unsent job should not heartbeat, calls = %d", s.count())
+	}
+}

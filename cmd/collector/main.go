@@ -39,11 +39,13 @@ func main() {
 		"timeout", cfg.Timeout.String(),
 		"max_retries", cfg.MaxRetries,
 		"state_file", cfg.StateFile,
+		"resend_interval", cfg.ResendInterval.String(),
 	)
 
 	jclient := jenkins.NewClient(cfg.JenkinsURL, cfg.Username, cfg.APIToken, cfg.Timeout)
 	s := sender.NewSender(cfg.ExporterURL, cfg.Timeout, cfg.MaxRetries, logger)
 	c := collector.NewWithState(jclient, s, cfg.Jobs, logger, cfg.StateFile)
+	c.SetResendInterval(cfg.ResendInterval)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

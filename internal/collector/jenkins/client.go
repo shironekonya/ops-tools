@@ -36,25 +36,33 @@ func NewClient(baseURL, username, apiToken string, timeout time.Duration) *Clien
 	}
 }
 
-// lastBuildResponse 是 /job/{name}/lastBuild/api/json 的结构化响应。
-// 用指针接收 result：构建进行中时 Jenkins 返回 null，需要区分"未完成"和"空字符串"。
-type lastBuildResponse struct {
+// completedBuildResponse 是 /job/{name}/lastCompletedBuild/api/json 的结构化响应。
+// 用指针接收 result 作为防御：lastCompletedBuild 正常情况下 result 非 null，
+// 但 Jenkins 版本/权限异常时仍可能返回 null，此时按"未完成"跳过更安全。
+type completedBuildResponse struct {
 	Number    int64   `json:"number"`
 	Result    *string `json:"result"`
 	Timestamp int64   `json:"timestamp"` // 开始时间，毫秒
 	Duration  int64   `json:"duration"`  // 耗时，毫秒
 }
 
-// GetLatestBuild 取某个 Job 的最新构建信息。
-// 返回值 ok=false 表示该 Job 的最新构建尚未完成（result 为 null），调用方应跳过。
+// GetLatestBuild 取某个 Job 最近一次已完成构建的信息。
+//
+// 刻意使用 lastCompletedBuild 而非 lastBuild：lastBuild 在 Jenkins 有构建正在
+// 执行时 result 为 null，采集器会一直跳过——即使上一轮已完成构建有完整数据，
+// 也会在 Job 长时间运行/频繁触发期间完全没有指标（现场实测过这个问题）。
+// lastCompletedBuild 始终指向最后一个有结果的构建，保证"最近一次构建状态"
+// 这类 Gauge 能持续反映已完成的事实。
+//
+// ok=false 仅在 result 异常为 null 时出现（防御性），调用方应跳过。
 func (c *Client) GetLatestBuild(job string) (info model.BuildInfo, ok bool, err error) {
-	path := "/job/" + url.PathEscape(job) + "/lastBuild/api/json"
-	var resp lastBuildResponse
+	path := "/job/" + url.PathEscape(job) + "/lastCompletedBuild/api/json"
+	var resp completedBuildResponse
 	if err := c.getJSON(path, &resp); err != nil {
 		return model.BuildInfo{}, false, err
 	}
 	if resp.Result == nil {
-		// 仍在构建中，没有最终结果。
+		// 防御：lastCompletedBuild 理论上总有结果，null 时跳过而非猜状态。
 		return model.BuildInfo{}, false, nil
 	}
 	return model.BuildInfo{
@@ -67,7 +75,7 @@ func (c *Client) GetLatestBuild(job string) (info model.BuildInfo, ok bool, err 
 }
 
 // GetConsoleLog 取指定构建的 console log 纯文本。
-// number<=0 时返回错误（避免拼出 /lastBuild/consoleText 之外的异常路径）。
+// number<=0 时返回错误（避免拼出异常路径）。
 func (c *Client) GetConsoleLog(job string, number int64) (string, error) {
 	if number <= 0 {
 		return "", fmt.Errorf("invalid build number %d", number)

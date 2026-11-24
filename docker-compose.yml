@@ -19,14 +19,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.exporter
-    image: ops-exporter:v1
+    image: ops-exporter:local
     container_name: ops-exporter
     ports:
       - "9105:9105"
     volumes:
       # config.docker.json 含 http 超时与数据过期配置；改配置后重建或 restart 挂载
       - ./config.docker.json:/app/config.json:ro
-      - exporter-data:/app/data
+      # 文件管道数据源：直接读宿主机 /data/log 下的 .json 任务结果（只读，exporter 不写结果文件）
+      - /data/log:/data/log:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9105/healthz"]
       interval: 30s
@@ -41,7 +42,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.collector
-    image: jenkins-collector:v1
+    image: jenkins-collector:local
     container_name: jenkins-collector
     # 认证不进镜像/不硬编码：运行时由 .env 注入（见 config.go 的 EnvJenkins*）
     environment:
@@ -62,7 +63,6 @@ services:
       - collector # 默认不起；docker compose --profile collector up -d 或显式指定服务名启动
 
 volumes:
-  exporter-data:
   collector-state:
 
 networks:
