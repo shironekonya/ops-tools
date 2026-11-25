@@ -1,0 +1,96 @@
+# Alertmanager 告警路由 —— 录入到 Rancher Monitoring 内置 Alertmanager 使用。
+#
+# 链路：Prometheus 规则触发 → Rancher Alertmanager 分组/路由 → 原生 receiver
+#       （email 主路径 / webhook 可选）→ 收件人。
+# 通知完全由 Alertmanager 自身完成，不依赖任何自建通知服务。
+#
+# 设计要点：
+#   1. 按 severity 分三条子路由，设不同的 group_wait / repeat_interval：
+#      critical 最快、重复最频繁；info 最慢、重复最少。
+#   2. inhibit_rules 抑制级联告警：Exporter / Collector 停摆时，依赖它们的
+#      下游任务告警都是"失真"的，抑制掉避免告警风暴。
+#   3. email 为默认 receiver；若走企业微信/钉钉/自研 webhook，见底部
+#      webhook 示例，把 route.receiver 指向它即可（可只留一种）。
+
+global:
+  resolve_timeout: 5m
+  # ---- SMTP：按你的实际邮件服务器修改 ----
+  # 凭据建议用 Rancher Secret 注入后以 _file 方式引用，避免明文写在这里：
+  #   smtp_auth_password_file: /etc/alertmanager/secrets/smtp-password
+  smtp_smarthost: 'smtp.example.com:25'
+  smtp_from: 'alertmanager@example.com'
+  smtp_require_tls: false
+  # smtp_auth_username: 'alertmanager@example.com'
+  # smtp_auth_password: 'CHANGE_ME'   # 不推荐明文；优先用 _file 引用 Secret
+
+# 抑制规则：源告警触发时，静默被抑制方的同组告警。
+inhibit_rules:
+  # Exporter 刷新停摆 → 所有文件管道任务告警失真，静默它们，只留关键告警。
+  - source_matchers:
+      - alertname="OpsExporterStale"
+    target_matchers:
+      - service="ops-exporter"
+      - alertname!="OpsExporterStale"
+    equal: ["service"]
+
+  # Jenkins Collector 停摆 → 具体 Job 的构建告警无意义。
+  - source_matchers:
+      - alertname="JenkinsBuildStale"
+    target_matchers:
+      - service="jenkins"
+      - alertname!="JenkinsBuildStale"
+    equal: ["service"]
+
+route:
+  # 按告警名 + 服务 + 任务分组：同一任务的同类告警合并成一封邮件。
+  group_by: ["alertname", "service", "job_name"]
+  group_wait: 30s          # 首次等待：收集同组告警，避免瞬间抖动
+  group_interval: 5m       # 同组新告警的发送间隔
+  repeat_interval: 4h      # 未恢复告警的重复提醒间隔
+  receiver: email-ops
+
+  routes:
+    # critical：链路级故障，最快通知 + 每小时重复提醒。
+    - receiver: email-ops
+      matchers:
+        - severity="critical"
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+      continue: false
+
+    # warning：任务/构建异常，标准节奏。
+    - receiver: email-ops
+      matchers:
+        - severity="warning"
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      continue: false
+
+    # info：长期停摆/从未成功，慢节奏，减少打扰。
+    - receiver: email-ops
+      matchers:
+        - severity="info"
+      group_wait: 1m
+      group_interval: 15m
+      repeat_interval: 12h
+      continue: false
+
+receivers:
+  # 主路径：Alertmanager 原生邮件通知。
+  - name: email-ops
+    email_configs:
+      - to: 'ops@example.com'          # 多收件人用逗号分隔
+        send_resolved: true
+        # 不要在这里写 Alertmanager 模板（{{ ... }}）。
+        # Rancher Monitoring chart 会对 additionalConfigString 再做一次 Helm tpl 渲染，
+        # 像 toUpper 这种 Alertmanager 函数 Helm 不认识，会导致 helm upgrade 失败。
+        # 使用 Alertmanager 默认 Subject 即可。
+
+  # 可选：改用 webhook（企业微信/钉钉/自研网关）时，
+  # 把上面 route.receiver 与各子路由的 receiver 改成 webhook-ops，并填真实 URL。
+  # - name: webhook-ops
+  #   webhook_configs:
+  #     - url: 'https://example.com/alert-webhook'
+  #       send_resolved: true

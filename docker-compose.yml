@@ -1,8 +1,11 @@
 # 业务容器编排：exporter + 可选 collector。
 #
-# 监控栈（Prometheus / Grafana）由目标 k3s 集群的 Rancher Monitoring 提供，
-# 不在此 compose 中部署：Rancher 按 DEPLOY.md 第 5 节配置 Additional Scrape
-# Configs 抓取 192.168.193.147:9105，按第 6 节导入 Dashboard 到 Rancher Grafana。
+# 监控告警栈（Prometheus / Grafana / Alertmanager）全部由目标 k3s 集群的
+# Rancher Monitoring 提供，不在此 compose 中部署：
+#   - Rancher 按 DEPLOY.md 第 5 节配 Additional Scrape Configs 抓 <TARGET_HOST>:9105
+#   - 按第 6 节导入 Dashboard 到 Rancher Grafana
+#   - 告警规则/路由录入 Rancher 内置 Prometheus / Alertmanager（见第 6.1、6.2 节），
+#     通知走 Alertmanager 原生 receiver（email / webhook），无自建通知服务
 #
 # 服务清单：
 #   exporter   — 接收 Jenkins 构建推送 + 文件管道，暴露 /metrics（默认启动）
@@ -11,8 +14,8 @@
 # 使用：
 #   1. cp .env.example .env，填入 JENKINS_USERNAME / JENKINS_API_TOKEN
 #   2. docker compose up -d                          # 只起 exporter
-#   3. docker compose --profile collector up -d      # 加 collector（需先填 .env 与 collector 配置）
-#   4. Grafana / Prometheus 走 Rancher（见 DEPLOY.md 第 5、6 节），无需访问容器端口
+#   3. docker compose --profile collector up -d      # 加 collector
+#   4. Grafana / Prometheus / Alertmanager 走 Rancher（见 DEPLOY.md 第 5、6 节）
 
 services:
   exporter:

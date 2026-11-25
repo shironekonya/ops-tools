@@ -1,0 +1,63 @@
+# Alertmanager 原生配置 - Webhook 版（用于 patch Secret / 本地链路测试）
+# 替换 url 为真实地址；邮件版见 alertmanager.yml
+
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: smtp.example.com:25
+  smtp_from: alertmanager@example.com
+  smtp_require_tls: false
+inhibit_rules:
+- source_matchers:
+  - alertname="OpsExporterStale"
+  target_matchers:
+  - service="ops-exporter"
+  - alertname!="OpsExporterStale"
+  equal:
+  - service
+- source_matchers:
+  - alertname="JenkinsBuildStale"
+  target_matchers:
+  - service="jenkins"
+  - alertname!="JenkinsBuildStale"
+  equal:
+  - service
+route:
+  group_by:
+  - alertname
+  - service
+  - job_name
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: webhook-ops
+  routes:
+  - receiver: webhook-ops
+    matchers:
+    - severity="critical"
+    group_wait: 10s
+    group_interval: 1m
+    repeat_interval: 1h
+    continue: false
+  - receiver: webhook-ops
+    matchers:
+    - severity="warning"
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    continue: false
+  - receiver: webhook-ops
+    matchers:
+    - severity="info"
+    group_wait: 1m
+    group_interval: 15m
+    repeat_interval: 12h
+    continue: false
+receivers:
+- name: email-ops
+  email_configs:
+  - to: ops@example.com
+    send_resolved: true
+- name: webhook-ops
+  webhook_configs:
+  - url: http://<TARGET_HOST>:9999/webhook
+    send_resolved: true

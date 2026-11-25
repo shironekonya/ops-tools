@@ -91,7 +91,7 @@
   "timezone": "browser",
   "title": "Ops Exporter - 任务与 Jenkins 构建状态",
   "uid": "ops-exporter",
-  "version": 2,
+  "version": 3,
   "weekStart": "",
   "panels": [
     {
@@ -1655,6 +1655,184 @@
                     }
                   ]
                 }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 80,
+      "type": "stat",
+      "title": "当前告警数",
+      "description": "Prometheus 规则触发后自动生成的 ALERTS 指标；0 表示无告警。规则加载/阈值见 deploy/prometheus/rules/。",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(ALERTS{alertstate=\"firing\"}) or vector(0)",
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "无数据"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 81,
+      "type": "table",
+      "title": "当前告警",
+      "description": "按告警名列出正在触发的告警（ALERTS）。需 Prometheus 已加载 alerting_rules.yml，Rancher 环境见 DEPLOY.md。",
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ALERTS{alertstate=\"firing\"}",
+          "instant": true,
+          "format": "time_series",
+          "legendFormat": "{{alertname}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "alertstate": true
+            },
+            "renameByName": {
+              "alertname": "告警",
+              "severity": "级别",
+              "service": "服务",
+              "job_name": "任务",
+              "instance": "实例"
+            },
+            "indexByName": {
+              "告警": 0,
+              "级别": 1,
+              "服务": 2,
+              "任务": 3,
+              "实例": 4
+            }
+          }
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true,
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#6E7B8F",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "无告警"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "级别"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "text": "严重",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "warning": {
+                        "text": "警告",
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "info": {
+                        "text": "提示",
+                        "color": "blue",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
               }
             ]
           }

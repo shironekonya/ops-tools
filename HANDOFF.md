@@ -15,7 +15,8 @@
 根目录  module ops-exporter（唯一 go.mod / go.sum，无 go.work）
 ├── cmd\
 │   ├── exporter\main.go               Exporter 入口（ops_job_* + jenkins_build_*，HTTP 9105）
-│   └── collector\main.go              Collector 入口（拉 Jenkins → POST Exporter）
+│   ├── collector\main.go              Collector 入口（拉 Jenkins → POST Exporter）
+│   └── alertai\main.go                告警分析入口（webhook → AI/规则分析 → 邮件，HTTP 9107）
 ├── internal\
 │   ├── exporter\                      Exporter 私有边界（collector 不 import）
 │   │   ├── config\                    配置（含 http 超时 + ingest 过期段）
@@ -34,9 +35,18 @@
 │       ├── sender\                    HTTP POST + 重试（4xx 不重试）
 │       ├── collector\                 ticker 采集编排 + 去重
 │       └── state\                     seen 断点续传（原子落盘）
+│   └── alertai\                       告警分析私有边界（零第三方依赖）
+│       ├── config\                    配置（LLM/SMTP 凭据只走环境变量）
+│       ├── model\                     Alertmanager webhook v4 payload
+│       ├── llm\                       OpenAI 兼容 Chat Completions 客户端
+│       ├── analyzer\                  LLM 优先 + 规则降级
+│       ├── notifier\                  net/smtp 邮件（587 STARTTLS）
+│       └── handler\                   /webhook /healthz /analysis
 ├── docs\task1-architecture.md
-├── Dockerfile.exporter / Dockerfile.collector / docker-compose.yml
-├── config.docker.json / config.collector.docker.json
+├── Dockerfile.exporter / Dockerfile.collector / Dockerfile.alertai / docker-compose.yml
+├── config.docker.json / config.collector.docker.json / config.alertai.example.json
+├── deploy\prometheus\rules\           告警规则 + 记录规则
+├── deploy\alertmanager\alertmanager.yml  分级路由 + 抑制 + webhook
 ├── DEPLOY.md / promql.md / grafana-dashboard.json / config.json
 └── dist\ops-exporter-linux-amd64      ⚠️ 拆包前编译的旧二进制，需重新构建才含 ingest/超时/过期
 ```
@@ -63,7 +73,9 @@
 - **合并单 module**：原 `jenkins-collector` 独立 module + 根 `go.work` 合并为单一 `ops-exporter` module。两个入口保留为 `cmd/exporter`、`cmd/collector`；内部实现收敛到 `internal/exporter/*` 与 `internal/collector/*` 两个互不相交的子树。删除 `go.work` 与子 `go.mod`，两侧 model 保持契约镜像不共用包。
 - **Task 4**：Dashboard 新增 Jenkins 区块（20 面板 / 3 变量，独立 `$jenkins_job`）；promql.md 补 Jenkins 查询与告警；DEPLOY.md 补验证清单。用官方 `promql/parser` 校验 27 条表达式 0 invalid，curl 抓 `/metrics` 值断言全对。
 - **Task 5**：可靠性 + 容器化。HTTP Server 全套超时（防 Slowloris）；数据过期（BuildStore.Prune + 删 Gauge 序列，保留 Counter）；Collector 断点续传（state 原子落盘 + 重启恢复）；`Dockerfile.exporter` / `Dockerfile.collector` + docker-compose 编排（当时为四服务）+ Prometheus/Grafana provisioning；后续按 Rancher 内置栈改为 compose 只含 exporter + 可选 collector（prometheus/grafana 服务已彻底删除）。
-- **总计约 122 个测试全绿**（合并后单 module 一次 `go test ./...` 覆盖全部 15 个包）；两个入口均可独立 `go build`。
+- **告警路由与 AI 分析（2026-11-24）**：新增第三入口 `cmd/alertai` + `internal/alertai/{config,model,llm,analyzer,notifier,handler}`（零第三方依赖，标准库 net/http + net/smtp）。链路：Alertmanager → `/webhook` → LLM（内网 OpenAI 兼容，失败降级规则分析）→ SMTP 邮件；`/healthz` 显示 llm_enabled/mail_enabled，`/analysis` 存最近 50 条。`deploy/alertmanager/alertmanager.yml` 按 severity 分级（critical/warning/info）+ 2 条 inhibit（Exporter/Collector 停摆静默级联）+ ai-webhook receiver。凭据全走环境变量（LLM_API_KEY/SMTP_PASSWORD 不落盘）。Dockerfile.alertai + compose profile `alertai` + config.alertai.example.json + .env.example 扩充；DEPLOY.md 6.2 节、README 同步。alertai 六包单测全绿。
+- **告警规则与记录规则（2026-11-24）**：新增 `deploy/prometheus/rules/recording_rules.yml`（10 条，预计算 `job:*` / `*:24h` / `*:7d` 口径 + `ops_exporter:rules_loaded:bool` 加载标记）与 `alerting_rules.yml`（10 条告警，产生 `ALERTS` 指标；含 `absent()` 关键任务逐条写死）；`prometheus.yml` 加 `rule_files`；Dashboard 新增面板 80/81（当前告警数 / 当前告警表）。用官方 `promql/parser` + yaml.v3 校验：规则 10+10 结构与 29 条 Dashboard 表达式全通过。Rancher 需在 Monitoring → Customize → Advanced 的 Additional Recording/Alerting Rules 分别录入。
+- **总计约 150 个测试全绿**（单 module 一次 `go test ./...` 覆盖 21 个包，含 alertai 六包）；三个入口（`exporter`/`collector`/`alertai`）均可独立 `go build`。
 
 ## 环境与规则
 
@@ -73,7 +85,7 @@
   export PATH="/d/Go/bin:$PATH"
   cd "C:/Users/shironeko/WorkBuddy/2026-11-18-16-36-15"
   go vet ./... && go test ./... -count=2
-  go build ./cmd/exporter && go build ./cmd/collector   # 两个入口均可独立构建
+  go build ./cmd/exporter && go build ./cmd/collector && go build ./cmd/alertai   # 三个入口均可独立构建
   ```
 - 规则：每步全量测试；单文件单职责；每个功能必须有测试；不许只编译不测试；完成后按固定格式汇报（修改文件 / 为什么 / 核心逻辑 / 测试结果 / 已知问题 / 下一步前置条件）。
 - 依赖规则：Collector 代码保持零第三方 import；Exporter 仅用已有的 prometheus/client_golang，不引新依赖（曾因 `prometheus/testutil` 引入新依赖而移除）。合并后共享同一 go.mod，不得因合并给 collector 侧引入第三方 import。

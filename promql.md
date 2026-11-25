@@ -211,3 +211,39 @@ groups:
 > 的 Jenkins 区块同源，改一处请同步另一处。
 > `unstable`/`aborted` 不计入 `failure_total`（语义上不是"构建失败"），但会让
 > `jenkins_build_status` 显示 0——如需把 unstable 也算失败，改 `buildupdater.go` 的计数分支。
+
+---
+
+## 13. 规则文件落地（告警指标 + 记录规则）
+
+上述查询已落地为可直接加载的 Prometheus 规则文件：
+
+| 文件 | 内容 |
+|---|---|
+| `deploy/prometheus/rules/recording_rules.yml` | 10 条记录规则：把高频表达式预计算成新序列 |
+| `deploy/prometheus/rules/alerting_rules.yml` | 10 条告警规则：触发后产生 `ALERTS` 告警指标 |
+
+**记录规则**（供面板与告警共用口径，命名 `level:metric:operations`）：
+
+```promql
+job:ops_job_last_run_age:seconds       # = time() - ops_job_last_run_timestamp_seconds
+job:ops_job_status:value               # = ops_job_last_status
+ops_exporter:last_refresh_age:seconds  # = time() - ops_exporter_last_refresh_timestamp_seconds
+job:jenkins_build_total:24h            # = sum by(job_name)(increase(...[24h]))
+job:jenkins_build_failure_rate:24h     # = 1 - failure/total（clamp_min 防除零）
+jenkins:build_last_age:seconds         # = time() - max(...)
+job:jenkins_build_duration_avg:7d      # = avg_over_time(...[7d])
+ops_exporter:rules_loaded:bool         # = vector(1)，加载标记，不产生告警
+```
+
+**告警规则**引用记录规则而非重复写表达式，因此改阈值/口径只需改一处。
+`absent()` 类告警逐条写死任务名（返回序列无标签）。
+
+验证：
+
+```promql
+ALERTS{alertstate="firing"}
+ops_exporter:rules_loaded:bool
+```
+
+加载方式见 `DEPLOY.md` 第 6.1 节（Rancher Monitoring 的 Additional Recording / Alerting Rules）。

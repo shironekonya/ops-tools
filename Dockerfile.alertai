@@ -1,0 +1,25 @@
+# AlertAI 告警分析 + 邮件通知服务容器镜像（多阶段构建）。
+#
+# 构建 context 必须是仓库根目录：与 exporter / collector 共用单一 go.mod。
+# 仅编译 cmd/alertai 及其依赖的 internal/alertai/*。
+# 凭据不进镜像：LLM_API_KEY / SMTP_PASSWORD / ALERT_MAIL_TO 等运行时由环境变量注入。
+FROM golang:1.27-alpine AS builder
+WORKDIR /src
+# 依赖已 vendor 固化；构建全程离线，不依赖 Go 模块代理（内网构建关键）。
+ENV CGO_ENABLED=0 GOOS=linux GOFLAGS=-mod=vendor
+
+COPY go.mod go.sum ./
+COPY vendor/ ./vendor/
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+RUN go build -trimpath -ldflags="-s -w" -o /out/alertai ./cmd/alertai
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata
+WORKDIR /app
+COPY --from=builder /out/alertai /app/alertai
+COPY config.alertai.example.json /app/config.json
+
+EXPOSE 9107
+ENTRYPOINT ["/app/alertai"]
+CMD ["-config", "/app/config.json"]

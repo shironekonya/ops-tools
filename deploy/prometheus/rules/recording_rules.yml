@@ -1,0 +1,59 @@
+# 记录规则（recording rules）：把 promql.md 中频繁计算的表达式预计算成新时间序列。
+# 目的：① Grafana 面板查询更快；② 告警规则复用同一口径，避免两处表达式漂移。
+#
+# 命名遵循 Prometheus 约定  level:metric:operations
+#   job:*       —— 保留 job_name 标签，按任务维度
+#   *:24h / *:7d —— 聚合窗口
+#
+# 注意：本文件由 Prometheus 加载，Rancher Monitoring 需在
+# Cluster → Monitoring → Customize → Advanced → Additional Recording Rules 中录入。
+
+groups:
+  - name: ops-exporter-recording
+    interval: 30s
+    rules:
+      # ---------- 文件管道 ops_job_* ----------
+      # 任务距今未执行秒数（第 1 条告警、Dashboard「距上次执行」共用）
+      - record: job:ops_job_last_run_age:seconds
+        expr: time() - ops_job_last_run_timestamp_seconds
+
+      # 任务距今未成功秒数（第 4 条告警辅助）
+      - record: job:ops_job_last_success_age:seconds
+        expr: time() - ops_job_last_success_timestamp_seconds
+
+      # 最近一次状态原值（1=成功 0=失败），便于面板统一取数
+      - record: job:ops_job_status:value
+        expr: ops_job_last_status
+
+      # Exporter 刷新线程距今秒数（第 2 条前置告警）
+      - record: ops_exporter:last_refresh_age:seconds
+        expr: time() - ops_exporter_last_refresh_timestamp_seconds
+
+      # ---------- Jenkins 管道 jenkins_build_* ----------
+      # 24h 窗口构建数（Counter 用 increase，自动处理 exporter 重启归零）
+      - record: job:jenkins_build_total:24h
+        expr: sum by (job_name) (increase(jenkins_build_total[24h]))
+
+      # 24h 窗口失败数
+      - record: job:jenkins_build_failure_total:24h
+        expr: sum by (job_name) (increase(jenkins_build_failure_total[24h]))
+
+      # 24h 失败率；clamp_min 防零构建除零
+      - record: job:jenkins_build_failure_rate:24h
+        expr: |
+          1 - (
+            job:jenkins_build_failure_total:24h
+            / clamp_min(job:jenkins_build_total:24h, 1)
+          )
+
+      # 全部 Jenkins Job 中最近一次构建结束时刻距今秒数（第 10 条）
+      - record: jenkins:build_last_age:seconds
+        expr: time() - max(jenkins_build_last_timestamp_seconds)
+
+      # 各 Job 7 天平均耗时，用于「耗时突增」相对阈值（第 11 条）
+      - record: job:jenkins_build_duration_avg:7d
+        expr: avg_over_time(jenkins_build_duration_seconds[7d])
+
+      # 规则加载标记：该序列存在即说明本文件已被 Prometheus 加载（不产生告警噪音）
+      - record: ops_exporter:rules_loaded:bool
+        expr: vector(1)

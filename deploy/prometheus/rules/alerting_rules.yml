@@ -1,0 +1,120 @@
+# 告警规则（alerting rules）：规则触发后 Prometheus 自动生成 ALERTS 告警指标，
+# 供 Grafana「当前告警」面板与 Alertmanager 通知使用。
+#
+# 表达式与阈值来源：promql.md 第 1~12 条。
+# 引用 recording_rules.yml 的预计算结果，保证面板与告警口径一致。
+#
+# 加载方式（生产走 Rancher）：
+#   Rancher Monitoring —— Cluster → Monitoring → Customize → Advanced
+#                         → Additional Alerting Rules 录入本文件内容
+#
+# severity 分级：critical（链路失效）> warning（任务/构建异常）> info（长期停摆/从未成功）
+
+groups:
+  - name: ops-exporter-alerts
+    interval: 30s
+    rules:
+      # 前置保障：Exporter 刷新线程停摆时，下面所有文件管道告警都不可信
+      - alert: OpsExporterStale
+        expr: ops_exporter:last_refresh_age:seconds > 60
+        for: 1m
+        labels:
+          severity: critical
+          service: ops-exporter
+        annotations:
+          summary: "Ops Exporter 超过 60 秒未成功刷新"
+          description: "实例 {{ $labels.instance }} 的 last_refresh 距今 {{ $value | humanizeDuration }}，文件管道数据不可信，请检查 exporter 与 /data/log 挂载。"
+          runbook_url: "DEPLOY.md#8-验证prometheus-查询接口已验证可用"
+
+      - alert: OpsJobStale
+        expr: job:ops_job_last_run_age:seconds > 86400
+        for: 10m
+        labels:
+          severity: warning
+          service: ops-exporter
+        annotations:
+          summary: "任务 {{ $labels.job_name }} 超过 24 小时未执行"
+          description: "最近一次执行距今 {{ $value | humanizeDuration }}，请检查调度或结果文件写入。"
+
+      - alert: OpsJobFailed
+        expr: job:ops_job_status:value == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: ops-exporter
+        annotations:
+          summary: "任务 {{ $labels.job_name }} 最近一次执行失败"
+          description: "这是最近一次状态，连续失败请看趋势面板。"
+
+      - alert: OpsJobNeverSucceeded
+        expr: ops_job_last_success_timestamp_seconds == 0
+        for: 30m
+        labels:
+          severity: info
+          service: ops-exporter
+        annotations:
+          summary: "任务 {{ $labels.job_name }} 从未成功过"
+          description: "last_success 为 0 是合法告警条件，不是缺数据。"
+
+      # absent() 返回的序列没有标签，必须逐条写明任务名（清单来自运维配置）
+      - alert: OpsJobAbsentDatabaseBackup
+        expr: absent(ops_job_last_run_timestamp_seconds{job_name="database_backup"})
+        for: 10m
+        labels:
+          severity: warning
+          service: ops-exporter
+        annotations:
+          summary: "关键任务 database_backup 从未产生结果"
+          description: "Exporter 一无所知，不会为它伪造序列。请检查任务是否接入。"
+
+      - alert: OpsJobAbsentFileSync
+        expr: absent(ops_job_last_run_timestamp_seconds{job_name="file_sync"})
+        for: 10m
+        labels:
+          severity: warning
+          service: ops-exporter
+        annotations:
+          summary: "关键任务 file_sync 从未产生结果"
+          description: "Exporter 一无所知，不会为它伪造序列。请检查任务是否接入。"
+
+      # ---------- Jenkins 构建管道 ----------
+      # status 为 0 包含 failed/unstable/aborted；如需排除后两者改 buildupdater.go
+      - alert: JenkinsBuildFailed
+        expr: jenkins_build_status == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+        annotations:
+          summary: "Jenkins 任务 {{ $labels.job_name }} 最近一次构建非成功"
+          description: "status=0（failed/unstable/aborted）。最新失败阶段见 Dashboard。"
+
+      - alert: JenkinsFailureRateHigh
+        expr: job:jenkins_build_failure_rate:24h > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          service: jenkins
+        annotations:
+          summary: "Jenkins 任务 {{ $labels.job_name }} 24h 失败率超过 10%"
+          description: "当前失败率 {{ $value | humanizePercentage }}。"
+
+      - alert: JenkinsBuildStale
+        expr: jenkins:build_last_age:seconds > 86400
+        for: 10m
+        labels:
+          severity: info
+          service: jenkins
+        annotations:
+          summary: "Jenkins 构建数据超过 24h 未更新"
+          description: "Collector 可能停摆或 Jenkins 长时间无构建；距今 {{ $value | humanizeDuration }}。"
+
+      - alert: JenkinsBuildDurationSpike
+        expr: jenkins_build_duration_seconds > 2 * job:jenkins_build_duration_avg:7d
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+        annotations:
+          summary: "Jenkins 任务 {{ $labels.job_name }} 构建耗时突增"
+          description: "当前耗时超过 7 天均值的 2 倍。"

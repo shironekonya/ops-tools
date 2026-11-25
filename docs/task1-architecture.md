@@ -4,7 +4,7 @@
 > 本文档中的"现有工程"即当前仓库（module 名 `ops-exporter`，任务文档中称 test-exporter，同一项目）。
 >
 > **结构演进提示（合并单 module 后追加）**：本文写于改造启动前，"目标文件布局"一节按当时约定记录为"平铺 package main + jenkins-collector 独立 module"。后续工程化已作废"不拆 package"约定；当前最终形态为**单一 module `ops-exporter` + 双入口**：
-> `cmd/exporter`、`cmd/collector`，实现分置 `internal/exporter/{config,model,reader,refresher,metrics,store,ingest,expiry}` 与 `internal/collector/{config,model,jenkins,parser,sender,collector,state}` 两个互不相交的子树；无 `go.work`、无子 `go.mod`。本文的**设计原则与数据流分析依然有效**，仅文件布局以 `HANDOFF.md` 的"当前工程结构"为准。
+> `cmd/exporter`、`cmd/collector`，实现分置 `internal/exporter/{config,model,reader,refresher,metrics,store,ingest,expiry}` 与 `internal/collector/{config,model,jenkins,parser,sender,collector,state}` 两个互不相交的子树；无 `go.work`、无子 `go.mod`。本文的**设计原则与数据流分析依然有效**，仅文件布局以 `docs/ARCHITECTURE.md` 的"目录结构"为准。
 
 ---
 

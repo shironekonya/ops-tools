@@ -1,0 +1,199 @@
+# Rancher Monitoring values - Webhook 版本（个人项目 / 无企业邮箱链路测试用）
+#
+# 与邮件版规则完全相同，仅把所有路由 receiver 改为 webhook-ops。
+# Alertmanager 原生配置放在 alertmanager.config；
+# alertmanager.alertmanagerSpec.additionalConfigString: "" 用于清掉旧版错误配置。
+#
+# 使用前必须替换：http://<TARGET_HOST>:9999/webhook
+# 本地测试接收器见 ALERTING_SETUP.md。
+# 安装/升级命令与邮件版相同，只是把 -f 指向本文件。
+
+prometheus:
+  additionalPrometheusRulesMap:
+    ops-recording:
+      groups:
+      - name: ops-exporter-recording
+        interval: 30s
+        rules:
+        - record: job:ops_job_last_run_age:seconds
+          expr: time() - ops_job_last_run_timestamp_seconds
+        - record: job:ops_job_last_success_age:seconds
+          expr: time() - ops_job_last_success_timestamp_seconds
+        - record: job:ops_job_status:value
+          expr: ops_job_last_status
+        - record: ops_exporter:last_refresh_age:seconds
+          expr: time() - ops_exporter_last_refresh_timestamp_seconds
+        - record: job:jenkins_build_total:24h
+          expr: sum by (job_name) (increase(jenkins_build_total[24h]))
+        - record: job:jenkins_build_failure_total:24h
+          expr: sum by (job_name) (increase(jenkins_build_failure_total[24h]))
+        - record: job:jenkins_build_failure_rate:24h
+          expr: "1 - (\n  job:jenkins_build_failure_total:24h\n  / clamp_min(job:jenkins_build_total:24h, 1)\n)\n"
+        - record: jenkins:build_last_age:seconds
+          expr: time() - max(jenkins_build_last_timestamp_seconds)
+        - record: job:jenkins_build_duration_avg:7d
+          expr: avg_over_time(jenkins_build_duration_seconds[7d])
+        - record: ops_exporter:rules_loaded:bool
+          expr: vector(1)
+    ops-alerting:
+      groups:
+      - name: ops-exporter-alerts
+        interval: 30s
+        rules:
+        - alert: OpsExporterStale
+          expr: ops_exporter:last_refresh_age:seconds > 60
+          for: 1m
+          labels:
+            severity: critical
+            service: ops-exporter
+          annotations:
+            summary: Ops Exporter 超过 60 秒未成功刷新
+            description: 实例 {{ $labels.instance }} 的 last_refresh 距今 {{ $value | humanizeDuration }}，文件管道数据不可信，请检查 exporter 与 /data/log 挂载。
+            runbook_url: DEPLOY.md#8-验证prometheus-查询接口已验证可用
+        - alert: OpsJobStale
+          expr: job:ops_job_last_run_age:seconds > 86400
+          for: 10m
+          labels:
+            severity: warning
+            service: ops-exporter
+          annotations:
+            summary: 任务 {{ $labels.job_name }} 超过 24 小时未执行
+            description: 最近一次执行距今 {{ $value | humanizeDuration }}，请检查调度或结果文件写入。
+        - alert: OpsJobFailed
+          expr: job:ops_job_status:value == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: ops-exporter
+          annotations:
+            summary: 任务 {{ $labels.job_name }} 最近一次执行失败
+            description: 这是最近一次状态，连续失败请看趋势面板。
+        - alert: OpsJobNeverSucceeded
+          expr: ops_job_last_success_timestamp_seconds == 0
+          for: 30m
+          labels:
+            severity: info
+            service: ops-exporter
+          annotations:
+            summary: 任务 {{ $labels.job_name }} 从未成功过
+            description: last_success 为 0 是合法告警条件，不是缺数据。
+        - alert: OpsJobAbsentDatabaseBackup
+          expr: absent(ops_job_last_run_timestamp_seconds{job_name="database_backup"})
+          for: 10m
+          labels:
+            severity: warning
+            service: ops-exporter
+          annotations:
+            summary: 关键任务 database_backup 从未产生结果
+            description: Exporter 一无所知，不会为它伪造序列。请检查任务是否接入。
+        - alert: OpsJobAbsentFileSync
+          expr: absent(ops_job_last_run_timestamp_seconds{job_name="file_sync"})
+          for: 10m
+          labels:
+            severity: warning
+            service: ops-exporter
+          annotations:
+            summary: 关键任务 file_sync 从未产生结果
+            description: Exporter 一无所知，不会为它伪造序列。请检查任务是否接入。
+        - alert: JenkinsBuildFailed
+          expr: jenkins_build_status == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: jenkins
+          annotations:
+            summary: Jenkins 任务 {{ $labels.job_name }} 最近一次构建非成功
+            description: status=0（failed/unstable/aborted）。最新失败阶段见 Dashboard。
+        - alert: JenkinsFailureRateHigh
+          expr: job:jenkins_build_failure_rate:24h > 0.1
+          for: 15m
+          labels:
+            severity: warning
+            service: jenkins
+          annotations:
+            summary: Jenkins 任务 {{ $labels.job_name }} 24h 失败率超过 10%
+            description: 当前失败率 {{ $value | humanizePercentage }}。
+        - alert: JenkinsBuildStale
+          expr: jenkins:build_last_age:seconds > 86400
+          for: 10m
+          labels:
+            severity: info
+            service: jenkins
+          annotations:
+            summary: Jenkins 构建数据超过 24h 未更新
+            description: Collector 可能停摆或 Jenkins 长时间无构建；距今 {{ $value | humanizeDuration }}。
+        - alert: JenkinsBuildDurationSpike
+          expr: jenkins_build_duration_seconds > 2 * job:jenkins_build_duration_avg:7d
+          for: 5m
+          labels:
+            severity: warning
+            service: jenkins
+          annotations:
+            summary: Jenkins 任务 {{ $labels.job_name }} 构建耗时突增
+            description: 当前耗时超过 7 天均值的 2 倍。
+alertmanager:
+  secret:
+    recreateIfExists: true
+  config:
+    global:
+      resolve_timeout: 5m
+      smtp_smarthost: smtp.example.com:25
+      smtp_from: alertmanager@example.com
+      smtp_require_tls: false
+    inhibit_rules:
+    - source_matchers:
+      - alertname="OpsExporterStale"
+      target_matchers:
+      - service="ops-exporter"
+      - alertname!="OpsExporterStale"
+      equal:
+      - service
+    - source_matchers:
+      - alertname="JenkinsBuildStale"
+      target_matchers:
+      - service="jenkins"
+      - alertname!="JenkinsBuildStale"
+      equal:
+      - service
+    route:
+      group_by:
+      - alertname
+      - service
+      - job_name
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: webhook-ops
+      routes:
+      - receiver: webhook-ops
+        matchers:
+        - severity="critical"
+        group_wait: 10s
+        group_interval: 1m
+        repeat_interval: 1h
+        continue: false
+      - receiver: webhook-ops
+        matchers:
+        - severity="warning"
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        continue: false
+      - receiver: webhook-ops
+        matchers:
+        - severity="info"
+        group_wait: 1m
+        group_interval: 15m
+        repeat_interval: 12h
+        continue: false
+    receivers:
+    - name: email-ops
+      email_configs:
+      - to: ops@example.com
+        send_resolved: true
+    - name: webhook-ops
+      webhook_configs:
+      - url: http://<TARGET_HOST>:9999/webhook
+        send_resolved: true
+  alertmanagerSpec:
+    additionalConfigString: ''

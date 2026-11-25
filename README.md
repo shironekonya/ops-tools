@@ -1,84 +1,95 @@
 # Ops Exporter
 
-将任务执行结果和 Jenkins 构建结果统为 Prometheus 指标，供 Rancher Prometheus 抓取、Grafana 展示。
+把**定时任务的执行结果**和 **Jenkins 构建结果**统一为 Prometheus 指标，交给 Rancher 内置的 Prometheus / Grafana / Alertmanager 做展示和告警。
 
-单一 Go module（`ops-exporter`），两个独立入口：Exporter（:9105）和 Collector。
+单一 Go module（`ops-exporter`），两个独立入口，边界隔离：
+
+- **Exporter**（`:9105`）：读取任务结果 JSON，接收 Collector 推送，暴露 `/metrics`、`/healthz`。
+- **Collector**（可选）：定时拉取 Jenkins REST API，把构建结果推送给 Exporter。
+
+本仓库**不部署 Prometheus / Grafana / Alertmanager**，也不含自建通知服务；告警通知由 Rancher 内置 Alertmanager 的原生 receiver（email / webhook）完成。
 
 ## 架构
 
+```mermaid
+flowchart LR
+    subgraph SRC["数据源"]
+        J["任务结果 JSON<br/>/data/log/*.json"]
+        JK["Jenkins REST API"]
+    end
+
+    subgraph OWN["本仓库 · 业务容器"]
+        CO["Collector（可选）<br/>采集 + 解析"]
+        EX["Exporter :9105<br/>/metrics · /healthz<br/>/api/v1/ingest/build"]
+    end
+
+    subgraph RCH["Rancher Monitoring · 集群内置"]
+        PR["Prometheus<br/>抓取 + 规则计算"]
+        GR["Grafana<br/>Dashboard"]
+        AM["Alertmanager<br/>分级路由 + 抑制"]
+    end
+
+    N["通知出口<br/>email / webhook"]
+
+    J -->|读文件| EX
+    JK -->|REST| CO
+    CO -->|POST /api/v1/ingest/build| EX
+    EX -->|scrape :9105| PR
+    PR --> GR
+    PR -->|ALERTS| AM
+    AM --> N
 ```
-任务结果 JSON (/data/log/*.json)          Jenkins REST API
-        |                                      |
-        v                                      v
-   reader -> refresher                   Collector -> POST /api/v1/ingest/build
-        |                                      |
-        +------------------+-------------------+
-                           v
-              Exporter :9105 -> /metrics -> Prometheus -> Grafana
+
+边界约定：两个 `internal/*` 子树互不 import；`BuildResult` 在两侧为契约镜像（字段与 JSON 一致，但不共用包，改字段须同步两边）。
+
+## 数据流向
+
+```mermaid
+flowchart TB
+    A["任务结果 JSON<br/>单文件单对象"] --> B["reader<br/>扫描一层目录 · 坏文件隔离"]
+    B --> C["refresher<br/>定时刷新 · ApplyResults"]
+    C --> D["GaugeVec<br/>ops_job_*"]
+
+    E["Jenkins Job"] --> F["Collector<br/>lastCompletedBuild + consoleText"]
+    F --> G["BuildResult<br/>POST /api/v1/ingest/build"]
+    G --> H["BuildStore<br/>按 job_name + build_number 去重"]
+    H --> I["jenkins_build_*<br/>Gauge + Counter"]
+
+    D --> M["/metrics"]
+    I --> M
+    M --> P["Rancher Prometheus 抓取"]
+    P --> R["recording / alerting rules<br/>生成 ALERTS"]
+    R --> AM["Alertmanager<br/>severity 路由 + 抑制"]
+    AM --> OUT["email / webhook<br/>收件人"]
 ```
 
-- Collector 可选——无 Jenkins 时只跑 Exporter，文件管道正常工作。
-- Prometheus / Grafana 由目标 k3s 的 Rancher Monitoring 提供，本仓库只编排业务容器。
-
-## 目录结构
-
-```
-cmd/exporter/  cmd/collector/          # 两个入口
-internal/exporter/                     # 读取/刷新/指标/存储/接收/过期
-internal/collector/                    # Jenkins 采集/解析/发送/状态
-vendor/  dist/  config*.json  docker-compose.yml
-grafana-dashboard.json  promql.md  DEPLOY.md  docs/
-```
-
-`internal/exporter` 与 `internal/collector` 互不 import，两侧 `BuildResult` 为契约镜像，改字段须同步。
-
-## 核心机制
-
-- **双管道指标**：`ops_job_*`（任务）、`jenkins_build_*`（构建）
-- **幂等去重**：按 `job_name + build_number`，重复构建忽略
-- **断点续传**：Collector `state.json` 原子落盘，重启不重发
-- **心跳重发**：默认每 2m 重发最新构建，Exporter 重启后自动恢复 Gauge
-- **数据过期**：`max_build_age`（默认 168h）只清 Gauge，Counter 保留
-- **安全**：HTTP 全套超时；认证走环境变量，不进镜像
+关键机制：幂等去重、断点续传（`state.json`）、心跳重发（重启后恢复 Gauge）、数据过期（`max_build_age` 只删 Gauge 保留 Counter）。详见 `docs/ARCHITECTURE.md`。
 
 ## 快速开始
 
 ```bash
-# 容器部署（目标机）
-cd /data/jenkins-exporter
-docker compose up -d                                    # 仅 Exporter
-# 需要 Jenkins：填 .env 的 JENKINS_API_TOKEN 后
-docker compose --profile collector up -d --build         # + Collector
-
+docker compose up -d                          # 只起 Exporter
+docker compose --profile collector up -d      # 需要 Jenkins 采集时（先填 .env）
 curl -s localhost:9105/healthz
 curl -s localhost:9105/metrics | grep -E '^ops_job_|^jenkins_build_'
 ```
 
-```bash
-# 本地开发
-go vet ./... && go test ./... -count=2
-go build ./cmd/exporter && go build ./cmd/collector
-GOFLAGS=-mod=vendor go build ./cmd/exporter              # 离线构建
-```
+完整部署、配置与本地开发步骤见 `docs/QUICKSTART.md` 和 `DEPLOY.md`。
 
-增删依赖后必须重跑 `go mod vendor`。
+## 文档
 
-## 配置
-
-| 文件 | 用途 |
+| 文档 | 内容 |
 |---|---|
-| `config*.json` | Exporter：监听地址、`result_dir`、刷新周期、过期、超时 |
-| `config.collector.*.json` | Collector：Jenkins 地址、Job 列表、`resend_interval` |
-| `.env` | `JENKINS_USERNAME` / `JENKINS_API_TOKEN`（不进版本库） |
+| `docs/ARCHITECTURE.md` | 目录结构、核心机制、边界约定、指标清单 |
+| `docs/QUICKSTART.md` | 容器启动、本地开发验证、配置文件说明 |
+| `DEPLOY.md` | Linux/systemd、Rancher 抓目标、Dashboard 导入、故障排查 |
+| `ALERTING_SETUP.md` | Helm values 层级、告警规则、Alertmanager 路由、webhook 测试 |
+| `promql.md` | 查询语句、告警表达式、No data / 从未成功语义 |
+| `PROJECT_SUMMARY.md` | 项目现状、收尾验证清单、升级路线与维护原则 |
+| `docs/task1-architecture.md` | 动态化改造的架构分析与设计演进（历史文档） |
 
-## 指标
+> `.local/HANDOFF.md` 是本地会话交接记录，含现场快照，不纳入共享仓库。
 
-- 任务：`ops_job_last_status` / `last_run_timestamp` / `last_success_timestamp` / `last_duration` / `ops_exporter_last_refresh_timestamp`
-- 构建：`jenkins_build_status` / `duration` / `last_timestamp` / `total` / `failure_total`
-- 查询与告警规则见 `promql.md`，面板见 `grafana-dashboard.json`。
+## 提交前检查
 
-## 相关文档
-
-- `DEPLOY.md` — 部署、验证与故障排查
-- `HANDOFF.md` — 交接上下文与边界约定
-- `docs/task1-architecture.md` — 架构设计
+`.env` 已忽略，只提交 `.env.example`（令牌留空）；主机地址用 `<TARGET_HOST>` / `<K3S_NODE>` 占位；`vendor/` 必须提交（离线构建依赖）；`dist/` 是本地产物不提交。

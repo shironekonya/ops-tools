@@ -1,0 +1,6 @@
+{
+  "listen_addr": ":9107",
+  "llm_model": "qwen2.5:7b",
+  "smtp_port": 25,
+  "timeout": "15s"
+}

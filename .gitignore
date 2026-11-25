@@ -1,30 +1,40 @@
-# 敏感信息：本地环境变量（含 Jenkins 用户名/API Token、Grafana 密码）
+# ========== 凭据与本地环境（绝对不能提交） ==========
 .env
 .env.*
 !.env.example
+*.kubeconfig
+kubeconfig
+helm-values.backup.yaml
 
-# 含真实凭据或本地地址的配置文件（按需创建，模板见 *.example.json）
-config.local.json
-config.collector.local.json
+# ========== 本机工作区数据 ==========
+.workbuddy/
+.local/
+collector-state/
+*.state.json
 
-# 运行时数据与断点（result_dir / state_file：采集结果、collector 状态）
-data/
-# 构建产物
+# ========== 构建产物 / 二进制（用 go build 生成） ==========
 dist/
-/bin/
 *.exe
+*.dll
+*.so
+*.dylib
+# 仅忽略根目录的 go build 产物，不能写成 exporter / collector（会误伤源码目录）
+/exporter
+/collector
+/ops-exporter-linux-amd64
+/jenkins-collector-linux-amd64
 
-# Go 测试与覆盖率产物
-*.test
-*.out
-coverage.*
-
-# 日志与临时文件和环境变量
+# ========== 运行时与临时文件 ==========
 *.log
-*.bak
 *.tmp
-*.env 
-# 编辑器 / 操作系统
-.idea/
-.vscode/
+*.swp
 .DS_Store
+render-check*.yaml
+render-check*.err
+
+# ========== Go 测试与覆盖率 ==========
+coverage.out
+coverage.html
+*.test
+
+# 说明：vendor/ 必须提交（离线构建依赖），不要加到这里。
