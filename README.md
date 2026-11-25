@@ -88,8 +88,4 @@ curl -s localhost:9105/metrics | grep -E '^ops_job_|^jenkins_build_'
 | `PROJECT_SUMMARY.md` | 项目现状、收尾验证清单、升级路线与维护原则 |
 | `docs/task1-architecture.md` | 动态化改造的架构分析与设计演进（历史文档） |
 
-> `.local/HANDOFF.md` 是本地会话交接记录，含现场快照，不纳入共享仓库。
 
-## 提交前检查
-
-`.env` 已忽略，只提交 `.env.example`（令牌留空）；主机地址用 `<TARGET_HOST>` / `<K3S_NODE>` 占位；`vendor/` 必须提交（离线构建依赖）；`dist/` 是本地产物不提交。
